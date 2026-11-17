@@ -1,0 +1,46 @@
+
+# Environment variables
+.env
+.env.*
+!.env.example
+
+# Node.js
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+pnpm-debug.log*
+
+# Flutter / Dart
+.dart_tool/
+.flutter-plugins
+.flutter-plugins-dependencies
+.packages
+.pub-cache/
+build/
+.flutter-automation/
+coverage/
+
+# IDE
+.idea/
+.vscode/
+*.iml
+
+# Operating System
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Logs
+*.log
+
+# PostgreSQL
+*.dump
+*.backup
+
+# Temporary files
+*.tmp
+*.temp
+
+# Generated files
+*.g.dart
+*.freezed.dart
