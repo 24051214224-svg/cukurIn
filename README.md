@@ -81,6 +81,10 @@ Pengembangan aplikasi ini diharapkan dapat meningkatkan efisiensi pengelolaan re
 - `GET /api/barbers/:barberId/queues/today` - Melihat antrean harian oleh barber yang ditugaskan atau admin.
 - `PATCH /api/queues/:id/call`, `/start`, `/complete`, `/cancel` - Mengelola siklus status antrean.
 - `PATCH /api/queues/:id/check-in` atau `POST /api/queues/check-in` - Check-in dengan QR token milik antrean.
+- `POST /api/reviews` - Membuat review untuk booking completed milik customer.
+- `GET /api/reviews/barber/:barberId` - Melihat review dan rating agregat barber.
+- `GET /api/reviews/my` - Melihat review milik customer.
+- `GET /api/reviews/:id` - Melihat detail review sesuai role dan kepemilikan.
 
 Dokumentasi Swagger tersedia di `http://localhost:3000/api-docs`.
 

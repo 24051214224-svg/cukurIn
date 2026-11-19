@@ -52,6 +52,8 @@ app.use("/api/bookings", require("./routes/bookingRoutes"));
 
 app.use("/api/queues", require("./routes/queueRoutes"));
 
+app.use("/api/reviews", require("./routes/reviewRoutes"));
+
 app.use("/api-docs", swaggerUi.serve, swaggerUi.setup(swaggerSpec));
 
 // 404 handler

@@ -36,6 +36,7 @@ const swaggerSpec = swaggerJsdoc({
       { name: "Barbers" },
       { name: "Bookings" },
       { name: "Queues" },
+      { name: "Reviews" },
     ],
     components: {
       securitySchemes: {
@@ -195,6 +196,34 @@ const swaggerSpec = swaggerJsdoc({
                 "cancelled",
                 "no_show",
               ],
+            },
+            CreateReviewRequest: {
+              type: "object",
+              required: ["booking_id", "rating"],
+              additionalProperties: false,
+              properties: {
+                booking_id: { type: "string", format: "uuid" },
+                rating: { type: "integer", minimum: 1, maximum: 5 },
+                comment: {
+                  type: "string",
+                  maxLength: 1000,
+                  nullable: true,
+                },
+              },
+            },
+            ReviewResponse: {
+              type: "object",
+              properties: {
+                id: { type: "string", format: "uuid" },
+                booking_id: { type: "string", format: "uuid" },
+                customer_id: { type: "string", format: "uuid" },
+                barber_id: { type: "string", format: "uuid" },
+                rating: { type: "integer", minimum: 1, maximum: 5 },
+                comment: { type: "string", nullable: true },
+                created_at: { type: "string", format: "date-time" },
+                customer_name: { type: "string" },
+                barber_name: { type: "string" },
+              },
             },
           },
         },
@@ -643,6 +672,84 @@ const swaggerSpec = swaggerJsdoc({
             403: response("Role tidak dapat mengubah status reservasi."),
             404: response("Reservasi tidak ditemukan atau bukan milik barber."),
             409: response("Transisi status tidak diizinkan."),
+          },
+        },
+      },
+      "/api/reviews": {
+        post: {
+          tags: ["Reviews"],
+          summary: "Buat review untuk booking yang selesai",
+          description:
+            "Hanya customer pemilik booking completed yang dapat membuat satu review.",
+          security: [{ bearerAuth: [] }],
+          requestBody: jsonRequestBody({
+            $ref: "#/components/schemas/CreateReviewRequest",
+          }),
+          responses: {
+            201: response("Review berhasil dibuat."),
+            400: response("Booking atau data review tidak valid."),
+            401: response("JWT tidak valid atau tidak tersedia."),
+            403: response("Hanya customer yang dapat membuat review."),
+            404: response("Booking tidak ditemukan atau bukan milik customer."),
+            409: response("Booking belum selesai atau sudah memiliki review."),
+            500: response("Gagal membuat review."),
+          },
+        },
+      },
+      "/api/reviews/my": {
+        get: {
+          tags: ["Reviews"],
+          summary: "Daftar review milik customer",
+          security: [{ bearerAuth: [] }],
+          responses: {
+            200: response("Daftar review customer."),
+            401: response("JWT tidak valid atau tidak tersedia."),
+            403: response("Hanya customer yang dapat mengakses endpoint ini."),
+            500: response("Gagal mengambil review customer."),
+          },
+        },
+      },
+      "/api/reviews/barber/{barberId}": {
+        parameters: [
+          {
+            name: "barberId",
+            in: "path",
+            required: true,
+            schema: { type: "string", format: "uuid" },
+          },
+        ],
+        get: {
+          tags: ["Reviews"],
+          summary: "Daftar review dan rating agregat barber",
+          responses: {
+            200: response("Daftar review beserta rata-rata rating."),
+            400: response("ID barber tidak valid."),
+            404: response("Barber tidak ditemukan."),
+            500: response("Gagal mengambil review barber."),
+          },
+        },
+      },
+      "/api/reviews/{id}": {
+        parameters: [
+          {
+            name: "id",
+            in: "path",
+            required: true,
+            schema: { type: "string", format: "uuid" },
+          },
+        ],
+        get: {
+          tags: ["Reviews"],
+          summary: "Detail review",
+          description:
+            "Customer hanya melihat review miliknya, barber hanya review miliknya, dan admin dapat melihat seluruh review.",
+          security: [{ bearerAuth: [] }],
+          responses: {
+            200: response("Detail review."),
+            400: response("ID review tidak valid."),
+            401: response("JWT tidak valid atau tidak tersedia."),
+            404: response("Review tidak ditemukan atau tidak dapat diakses."),
+            500: response("Gagal mengambil detail review."),
           },
         },
       },
