@@ -198,6 +198,42 @@ const swaggerSpec = swaggerJsdoc({
             },
           },
         },
+        QueueStatus: {
+          type: "string",
+          enum: ["waiting", "called", "serving", "completed", "cancelled"],
+        },
+        QueueCheckInRequest: {
+          type: "object",
+          required: ["qr_token"],
+          properties: {
+            qr_token: {
+              type: "string",
+              format: "uuid",
+              description: "Token QR milik antrean customer.",
+            },
+          },
+        },
+        QueueResponse: {
+          type: "object",
+          properties: {
+            id: { type: "string", format: "uuid" },
+            booking_id: { type: "string", format: "uuid" },
+            barber_id: { type: "string", format: "uuid" },
+            customer_id: { type: "string", format: "uuid" },
+            queue_date: { type: "string", format: "date" },
+            queue_number: { type: "integer", minimum: 1 },
+            status: { $ref: "#/components/schemas/QueueStatus" },
+            estimated_start_at: { type: "string", format: "date-time", nullable: true },
+            estimated_end_at: { type: "string", format: "date-time", nullable: true },
+            checked_in_at: { type: "string", format: "date-time", nullable: true },
+            started_at: { type: "string", format: "date-time", nullable: true },
+            completed_at: { type: "string", format: "date-time", nullable: true },
+            cancelled_at: { type: "string", format: "date-time", nullable: true },
+            booking_status: { type: "string" },
+            customer_name: { type: "string" },
+            barber_name: { type: "string" },
+          },
+        },
       },
     },
     paths: {
@@ -607,6 +643,216 @@ const swaggerSpec = swaggerJsdoc({
             403: response("Role tidak dapat mengubah status reservasi."),
             404: response("Reservasi tidak ditemukan atau bukan milik barber."),
             409: response("Transisi status tidak diizinkan."),
+          },
+        },
+      },
+      "/api/queues/my": {
+        get: {
+          tags: ["Queues"],
+          summary: "Daftar antrean milik customer",
+          security: [{ bearerAuth: [] }],
+          responses: {
+            200: response("Daftar antrean customer."),
+            401: response("JWT tidak valid atau tidak tersedia."),
+            403: response("Hanya customer yang dapat mengakses endpoint ini."),
+            500: response("Gagal mengambil daftar antrean."),
+          },
+        },
+      },
+      "/api/queues/check-in": {
+        post: {
+          tags: ["Queues"],
+          summary: "Check-in antrean menggunakan QR token",
+          description:
+            "Token hanya dapat digunakan oleh customer pemilik booking dan hanya sekali.",
+          security: [{ bearerAuth: [] }],
+          requestBody: jsonRequestBody({
+            $ref: "#/components/schemas/QueueCheckInRequest",
+          }),
+          responses: {
+            200: response("Check-in berhasil."),
+            400: response("QR token tidak valid."),
+            401: response("JWT tidak valid atau tidak tersedia."),
+            404: response("Antrean atau QR token tidak ditemukan."),
+            409: response("Token sudah dipakai atau antrean tidak aktif."),
+            500: response("Gagal melakukan check-in."),
+          },
+        },
+      },
+      "/api/queues/{id}": {
+        parameters: [
+          {
+            name: "id",
+            in: "path",
+            required: true,
+            schema: { type: "string", format: "uuid" },
+          },
+        ],
+        get: {
+          tags: ["Queues"],
+          summary: "Detail antrean",
+          description:
+            "Customer hanya dapat melihat antreannya sendiri; barber hanya antrean miliknya; admin dapat melihat semua antrean.",
+          security: [{ bearerAuth: [] }],
+          responses: {
+            200: response("Detail antrean beserta estimasi waktu."),
+            400: response("ID antrean tidak valid."),
+            401: response("JWT tidak valid atau tidak tersedia."),
+            404: response("Antrean tidak ditemukan atau tidak dapat diakses."),
+            500: response("Gagal mengambil detail antrean."),
+          },
+        },
+      },
+      "/api/queues/{id}/check-in": {
+        parameters: [
+          {
+            name: "id",
+            in: "path",
+            required: true,
+            schema: { type: "string", format: "uuid" },
+          },
+        ],
+        patch: {
+          tags: ["Queues"],
+          summary: "Check-in antrean berdasarkan ID dan QR token",
+          security: [{ bearerAuth: [] }],
+          requestBody: jsonRequestBody({
+            $ref: "#/components/schemas/QueueCheckInRequest",
+          }),
+          responses: {
+            200: response("Check-in berhasil."),
+            400: response("ID atau QR token tidak valid."),
+            401: response("JWT tidak valid atau tidak tersedia."),
+            404: response("Antrean tidak ditemukan."),
+            409: response("Token sudah dipakai atau antrean tidak aktif."),
+            500: response("Gagal melakukan check-in."),
+          },
+        },
+      },
+      "/api/barbers/{barberId}/queues/today": {
+        parameters: [
+          {
+            name: "barberId",
+            in: "path",
+            required: true,
+            schema: { type: "string", format: "uuid" },
+          },
+        ],
+        get: {
+          tags: ["Queues"],
+          summary: "Antrean harian milik barber",
+          description:
+            "Barber hanya dapat melihat barber yang ditugaskan kepadanya; admin dapat melihat semua barber.",
+          security: [{ bearerAuth: [] }],
+          responses: {
+            200: response("Daftar antrean harian."),
+            400: response("ID barber tidak valid."),
+            401: response("JWT tidak valid atau tidak tersedia."),
+            403: response("Role tidak dapat mengakses endpoint ini."),
+            404: response("Barber tidak ditemukan."),
+            500: response("Gagal mengambil antrean harian."),
+          },
+        },
+      },
+      "/api/queues/{id}/call": {
+        parameters: [
+          {
+            name: "id",
+            in: "path",
+            required: true,
+            schema: { type: "string", format: "uuid" },
+          },
+        ],
+        patch: {
+          tags: ["Queues"],
+          summary: "Memanggil customer",
+          security: [{ bearerAuth: [] }],
+          responses: {
+            200: response("Status antrean berubah menjadi called."),
+            400: response("ID antrean tidak valid."),
+            401: response("JWT tidak valid atau tidak tersedia."),
+            403: response("Hanya barber atau admin."),
+            404: response("Antrean tidak ditemukan."),
+            409: response("Transisi status tidak valid."),
+            500: response("Gagal memanggil antrean."),
+          },
+        },
+      },
+      "/api/queues/{id}/start": {
+        parameters: [
+          {
+            name: "id",
+            in: "path",
+            required: true,
+            schema: { type: "string", format: "uuid" },
+          },
+        ],
+        patch: {
+          tags: ["Queues"],
+          summary: "Memulai layanan antrean",
+          description:
+            "Memulai layanan akan menyinkronkan booking terkait menjadi in_progress.",
+          security: [{ bearerAuth: [] }],
+          responses: {
+            200: response("Status antrean berubah menjadi serving."),
+            400: response("ID antrean tidak valid."),
+            401: response("JWT tidak valid atau tidak tersedia."),
+            403: response("Hanya barber atau admin."),
+            404: response("Antrean tidak ditemukan."),
+            409: response("Transisi status tidak valid."),
+            500: response("Gagal memulai layanan."),
+          },
+        },
+      },
+      "/api/queues/{id}/complete": {
+        parameters: [
+          {
+            name: "id",
+            in: "path",
+            required: true,
+            schema: { type: "string", format: "uuid" },
+          },
+        ],
+        patch: {
+          tags: ["Queues"],
+          summary: "Menyelesaikan layanan antrean",
+          description:
+            "Menyelesaikan layanan akan menyinkronkan booking terkait menjadi completed.",
+          security: [{ bearerAuth: [] }],
+          responses: {
+            200: response("Status antrean berubah menjadi completed."),
+            400: response("ID antrean tidak valid."),
+            401: response("JWT tidak valid atau tidak tersedia."),
+            403: response("Hanya barber atau admin."),
+            404: response("Antrean tidak ditemukan."),
+            409: response("Transisi status tidak valid."),
+            500: response("Gagal menyelesaikan layanan."),
+          },
+        },
+      },
+      "/api/queues/{id}/cancel": {
+        parameters: [
+          {
+            name: "id",
+            in: "path",
+            required: true,
+            schema: { type: "string", format: "uuid" },
+          },
+        ],
+        patch: {
+          tags: ["Queues"],
+          summary: "Membatalkan antrean",
+          description:
+            "Customer hanya dapat membatalkan antreannya sendiri. Layanan serving dapat dibatalkan admin, tetapi tidak oleh barber/customer.",
+          security: [{ bearerAuth: [] }],
+          responses: {
+            200: response("Antrean berhasil dibatalkan."),
+            400: response("ID antrean tidak valid."),
+            401: response("JWT tidak valid atau tidak tersedia."),
+            403: response("Role tidak dapat membatalkan antrean."),
+            404: response("Antrean tidak ditemukan."),
+            409: response("Status antrean tidak dapat dibatalkan."),
+            500: response("Gagal membatalkan antrean."),
           },
         },
       },

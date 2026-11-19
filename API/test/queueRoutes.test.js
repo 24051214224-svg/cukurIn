@@ -311,3 +311,26 @@ test("Smart ETA includes serving duration and excludes completed/cancelled queue
   assert.equal(estimates.get("b").estimated_end_at,
     "2026-11-20T03:40:00.000Z");
 });
+
+test("Swagger documents every queue endpoint and check-in security", () => {
+  const swaggerSpec = require("../src/docs/swagger");
+  const queuePaths = [
+    "/api/queues/my",
+    "/api/queues/check-in",
+    "/api/queues/{id}",
+    "/api/queues/{id}/check-in",
+    "/api/barbers/{barberId}/queues/today",
+    "/api/queues/{id}/call",
+    "/api/queues/{id}/start",
+    "/api/queues/{id}/complete",
+    "/api/queues/{id}/cancel",
+  ];
+
+  for (const queuePath of queuePaths) {
+    assert.equal(Boolean(swaggerSpec.paths[queuePath]), true);
+  }
+  assert.deepEqual(
+    swaggerSpec.paths["/api/queues/check-in"].post.security,
+    [{ bearerAuth: [] }]
+  );
+});
