@@ -62,6 +62,45 @@ Pengembangan aplikasi ini diharapkan dapat meningkatkan efisiensi pengelolaan re
 - `API/` - REST API dan autentikasi.
 - `Backend/` - Logika bisnis, model, migrasi, dan seed database.
 
-## 6. Status Pengembangan
+## 6. API yang Sudah Tersedia
 
-Project sedang dalam tahap pengembangan sebagai pemenuhan Project Besar mata kuliah Pemrograman Aplikasi Bergerak.
+- `GET /api/health` - Memeriksa koneksi API dan PostgreSQL.
+- `POST /api/auth/register`, `POST /api/auth/login`, `GET /api/auth/me` - Autentikasi dan profil.
+- `GET /api/services`, `GET /api/services/:id` - Membaca layanan aktif.
+- `POST /api/services`, `PUT /api/services/:id`, `DELETE /api/services/:id` - Mengelola layanan (admin).
+- `GET /api/barbers`, `GET /api/barbers/:id` - Membaca barber aktif, rating, dan portofolio.
+- `GET /api/barbers/admin` - Melihat seluruh barber termasuk akun nonaktif (admin).
+- `POST /api/barbers`, `PUT /api/barbers/:id`, `DELETE /api/barbers/:id` - Mengelola akun dan profil barber (admin).
+- `GET /api/barbers/:barberId/schedules` - Melihat jadwal barber aktif.
+- `POST /api/barbers/:barberId/schedules`, `PATCH /api/barbers/:barberId/schedules/:scheduleId`, `DELETE /api/barbers/:barberId/schedules/:scheduleId` - Mengelola jadwal (admin).
+- `POST /api/bookings`, `GET /api/bookings`, `GET /api/bookings/:id` - Membuat dan melihat reservasi sesuai role.
+- `PATCH /api/bookings/:id/cancel` - Membatalkan reservasi customer yang masih dapat dibatalkan.
+- `PATCH /api/bookings/:id/status` - Mengubah status reservasi oleh admin atau barber yang ditugaskan.
+- `GET /api/queues/my` - Melihat antrean milik customer.
+- `GET /api/queues/:id` - Melihat detail antrean sesuai kepemilikan dan role.
+- `GET /api/barbers/:barberId/queues/today` - Melihat antrean harian oleh barber yang ditugaskan atau admin.
+- `PATCH /api/queues/:id/call`, `/start`, `/complete`, `/cancel` - Mengelola siklus status antrean.
+- `PATCH /api/queues/:id/check-in` atau `POST /api/queues/check-in` - Check-in dengan QR token milik antrean.
+
+Dokumentasi Swagger tersedia di `http://localhost:3000/api-docs`.
+
+Pembuatan reservasi memvalidasi jam kerja barber dan layanan aktif, menghitung harga serta durasi dari database, lalu menyimpan snapshot layanan dalam transaksi. Booking untuk barber yang sama diserialisasi dengan row lock barber sehingga permintaan bersamaan tidak dapat mengalokasikan waktu yang bertabrakan. Queue/antrean belum dibuat oleh endpoint booking.
+
+Untuk menjalankan pengujian API:
+
+```powershell
+cd API
+npm test
+```
+
+Untuk membuat atau memperbarui satu akun barber seed, isi `SEED_BARBER_NAME`, `SEED_BARBER_EMAIL`, `SEED_BARBER_PHONE`, dan `SEED_BARBER_PASSWORD` secara lokal pada `API/.env`, kemudian jalankan:
+
+```powershell
+npm run seed:barber
+```
+
+Password di-hash dengan bcryptjs. Seed menggunakan transaksi, tidak mempromosikan akun non-barber, dan tidak mengubah file `.env` atau migration.
+
+## 7. Status Pengembangan
+
+API autentikasi, layanan, barber, jadwal barber, dan reservasi memiliki implementasi dasar. Queue/antrean, QR check-in, dan dashboard role belum diimplementasikan; frontend Flutter masih perlu diintegrasikan dengan endpoint API.
