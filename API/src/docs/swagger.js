@@ -33,6 +33,7 @@ const swaggerSpec = swaggerJsdoc({
       { name: "Health" },
       { name: "Authentication" },
       { name: "Services" },
+      { name: "Hairstyles" },
       { name: "Barbers" },
       { name: "Bookings" },
       { name: "Vouchers" },
@@ -83,6 +84,37 @@ const swaggerSpec = swaggerJsdoc({
             description: { type: "string", nullable: true },
             price: { type: "number", minimum: 0 },
             duration_minutes: { type: "integer", minimum: 1 },
+          },
+        },
+        HairstyleRecommendation: {
+          type: "object",
+          required: [
+            "id",
+            "hairstyle_name",
+            "description",
+            "image_url",
+            "face_shape",
+            "hair_type",
+          ],
+          properties: {
+            id: { type: "string", format: "uuid" },
+            hairstyle_name: { type: "string" },
+            description: { type: "string", nullable: true },
+            image_url: { type: "string", nullable: true },
+            face_shape: { type: "string" },
+            hair_type: { type: "string" },
+          },
+        },
+        HairstyleRecommendationResponse: {
+          type: "object",
+          required: ["success", "message", "data"],
+          properties: {
+            success: { type: "boolean" },
+            message: { type: "string" },
+            data: {
+              type: "array",
+              items: { $ref: "#/components/schemas/HairstyleRecommendation" },
+            },
           },
         },
         BarberRequest: {
@@ -460,6 +492,51 @@ const swaggerSpec = swaggerJsdoc({
             400: response("Input tidak valid."),
             401: response("JWT tidak valid atau tidak tersedia."),
             403: response("Hanya admin yang dapat mengelola layanan."),
+          },
+        },
+      },
+      "/api/hairstyles/recommendations": {
+        get: {
+          tags: ["Hairstyles"],
+          summary: "Rekomendasi hairstyle untuk customer",
+          description:
+            "Mencocokkan pilihan customer dengan hairstyle aktif. Nilai database `all` menjadi fallback; kecocokan spesifik ditampilkan lebih dahulu. Jika tidak ada hasil, data berupa array kosong.",
+          security: [{ bearerAuth: [] }],
+          parameters: [
+            {
+              name: "face_shape",
+              in: "query",
+              required: true,
+              schema: {
+                type: "string",
+                enum: ["oval", "round", "square", "heart", "oblong", "diamond"],
+              },
+            },
+            {
+              name: "hair_type",
+              in: "query",
+              required: true,
+              schema: {
+                type: "string",
+                enum: ["straight", "wavy", "curly", "coily"],
+              },
+            },
+          ],
+          responses: {
+            200: {
+              description:
+                "Daftar rekomendasi; dapat berupa array kosong jika tidak ada kecocokan.",
+              content: {
+                "application/json": {
+                  schema: {
+                    $ref: "#/components/schemas/HairstyleRecommendationResponse",
+                  },
+                },
+              },
+            },
+            400: response("Parameter bentuk wajah atau jenis rambut tidak valid."),
+            401: response("JWT tidak valid atau tidak tersedia."),
+            403: response("Hanya customer yang dapat mengakses rekomendasi."),
           },
         },
       },
