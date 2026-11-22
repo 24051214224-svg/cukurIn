@@ -45,66 +45,145 @@ Pengembangan aplikasi ini diharapkan dapat meningkatkan efisiensi pengelolaan re
 
 ## 4. Fitur Utama
 
-- Registrasi dan login pengguna.
-- Manajemen barber dan layanan.
-- Reservasi dan pemilihan jadwal.
-- Smart Queue dan estimasi waktu tunggu.
-- QR Code check-in.
-- Riwayat reservasi dan ulasan.
-- Rekomendasi gaya rambut.
-- Poin loyalitas dan voucher.
-- Dashboard admin dan barber.
-- Laporan dan grafik pendapatan.
+- Authentication dengan JWT untuk registrasi, login, dan profil pengguna.
+- Manajemen layanan dan barber, termasuk pengelolaan jadwal.
+- Booking dengan validasi jadwal dan perubahan status.
+- Manajemen antrean dengan estimasi waktu mulai/selesai (Smart ETA).
+- QR check-in untuk antrean.
+- Review dan rating barber.
 
 ## 5. Struktur Repository
 
-- `Frontend/` - Aplikasi mobile Flutter.
-- `API/` - REST API dan autentikasi.
-- `Backend/` - Logika bisnis, model, migrasi, dan seed database.
+- `API/` - REST API Node.js/Express, test, migration, seed, dan dokumentasi Swagger.
+- `Frontend/` - Saat ini hanya berisi `.gitkeep`; source Flutter belum ada di repository.
+- `Backend/` - Saat ini hanya berisi `.gitkeep`; source backend terpisah belum ada di repository.
 
-## 6. API yang Sudah Tersedia
+## 6. API yang Tersedia
 
-- `GET /api/health` - Memeriksa koneksi API dan PostgreSQL.
-- `POST /api/auth/register`, `POST /api/auth/login`, `GET /api/auth/me` - Autentikasi dan profil.
-- `GET /api/services`, `GET /api/services/:id` - Membaca layanan aktif.
-- `POST /api/services`, `PUT /api/services/:id`, `DELETE /api/services/:id` - Mengelola layanan (admin).
-- `GET /api/barbers`, `GET /api/barbers/:id` - Membaca barber aktif, rating, dan portofolio.
-- `GET /api/barbers/admin` - Melihat seluruh barber termasuk akun nonaktif (admin).
-- `POST /api/barbers`, `PUT /api/barbers/:id`, `DELETE /api/barbers/:id` - Mengelola akun dan profil barber (admin).
-- `GET /api/barbers/:barberId/schedules` - Melihat jadwal barber aktif.
-- `POST /api/barbers/:barberId/schedules`, `PATCH /api/barbers/:barberId/schedules/:scheduleId`, `DELETE /api/barbers/:barberId/schedules/:scheduleId` - Mengelola jadwal (admin).
-- `POST /api/bookings`, `GET /api/bookings`, `GET /api/bookings/:id` - Membuat dan melihat reservasi sesuai role.
-- `PATCH /api/bookings/:id/cancel` - Membatalkan reservasi customer yang masih dapat dibatalkan.
-- `PATCH /api/bookings/:id/status` - Mengubah status reservasi oleh admin atau barber yang ditugaskan.
-- `GET /api/queues/my` - Melihat antrean milik customer.
-- `GET /api/queues/:id` - Melihat detail antrean sesuai kepemilikan dan role.
-- `GET /api/barbers/:barberId/queues/today` - Melihat antrean harian oleh barber yang ditugaskan atau admin.
-- `PATCH /api/queues/:id/call`, `/start`, `/complete`, `/cancel` - Mengelola siklus status antrean.
-- `PATCH /api/queues/:id/check-in` atau `POST /api/queues/check-in` - Check-in dengan QR token milik antrean.
-- `POST /api/reviews` - Membuat review untuk booking completed milik customer.
-- `GET /api/reviews/barber/:barberId` - Melihat review dan rating agregat barber.
-- `GET /api/reviews/my` - Melihat review milik customer.
-- `GET /api/reviews/:id` - Melihat detail review sesuai role dan kepemilikan.
+Daftar berikut mengikuti route yang terpasang di `API/src/app.js` dan spesifikasi Swagger. Endpoint yang diberi tanda **JWT** memerlukan `Authorization: Bearer <token>`; pembatasan role diterapkan sesuai route.
 
-Dokumentasi Swagger tersedia di `http://localhost:3000/api-docs`.
+| Fitur | Method dan endpoint | Akses/catatan |
+|---|---|---|
+| Health | `GET /` | Status singkat API. |
+| Health | `GET /api/health` | Memeriksa koneksi PostgreSQL. |
+| Authentication | `POST /api/auth/register` | Registrasi customer. |
+| Authentication | `POST /api/auth/login` | Login dan memperoleh JWT. |
+| Authentication | `GET /api/auth/me` | JWT; profil pengguna aktif. |
+| Services | `GET /api/services`, `GET /api/services/:id` | Membaca layanan aktif. |
+| Services | `POST /api/services`, `PUT /api/services/:id`, `DELETE /api/services/:id` | JWT; admin. |
+| Barber | `GET /api/barbers`, `GET /api/barbers/:id` | Membaca barber aktif dan detailnya. |
+| Barber | `GET /api/barbers/admin` | JWT; admin, termasuk akun nonaktif. |
+| Barber | `POST /api/barbers`, `PUT /api/barbers/:id`, `DELETE /api/barbers/:id` | JWT; admin. |
+| Schedule | `GET /api/barbers/:barberId/schedules` | Membaca jadwal barber. |
+| Schedule | `POST /api/barbers/:barberId/schedules`, `PATCH /api/barbers/:barberId/schedules/:scheduleId`, `DELETE /api/barbers/:barberId/schedules/:scheduleId` | JWT; admin. |
+| Booking | `GET /api/bookings`, `POST /api/bookings`, `GET /api/bookings/:id` | JWT; akses dibatasi berdasarkan role dan kepemilikan. |
+| Booking | `PATCH /api/bookings/:id/cancel` | JWT; customer, mengikuti aturan status booking. |
+| Booking | `PATCH /api/bookings/:id/status` | JWT; barber atau admin, mengikuti aturan status booking. |
+| Queue / Smart ETA | `GET /api/queues/my`, `GET /api/queues/:id` | JWT; antrean customer/detail sesuai role dan kepemilikan. Detail antrean memuat estimasi waktu. |
+| Queue | `GET /api/barbers/:barberId/queues/today` | JWT; barber yang ditugaskan atau admin. |
+| QR check-in | `POST /api/queues/check-in` | JWT; customer mengirim QR token. |
+| QR check-in | `PATCH /api/queues/:id/check-in` | JWT; customer check-in antrean berdasarkan ID dan QR token. |
+| Queue lifecycle | `PATCH /api/queues/:id/call`, `PATCH /api/queues/:id/start`, `PATCH /api/queues/:id/complete`, `PATCH /api/queues/:id/cancel` | JWT; role dan transisi status mengikuti aturan masing-masing route. |
+| Review & Rating | `POST /api/reviews` | JWT; customer dapat mengulas booking yang memenuhi syarat. |
+| Review & Rating | `GET /api/reviews/barber/:barberId` | Daftar review dan rating barber. |
+| Review & Rating | `GET /api/reviews/my` | JWT; review customer. |
+| Review & Rating | `GET /api/reviews/:id` | JWT; detail sesuai role dan kepemilikan. |
+| Loyalty Points | `GET /api/loyalty/balance` | JWT; saldo customer yang login. |
+| Loyalty Points | `GET /api/loyalty/history?limit=50&offset=0` | JWT; riwayat customer yang login, `limit` maksimum 100. |
+| Loyalty Points | `POST /api/loyalty/redeem` | JWT; body `{ "points": 10 }`, jumlah harus integer positif dan tidak boleh melebihi saldo. |
 
-Pembuatan reservasi memvalidasi jam kerja barber dan layanan aktif, menghitung harga serta durasi dari database, lalu menyimpan snapshot layanan dalam transaksi. Booking untuk barber yang sama diserialisasi dengan row lock barber sehingga permintaan bersamaan tidak dapat mengalokasikan waktu yang bertabrakan. Queue/antrean belum dibuat oleh endpoint booking.
+Smart ETA merupakan data pada respons antrean, bukan endpoint terpisah. Check-in memvalidasi QR token; route tidak mendokumentasikan pembuatan gambar QR. Tidak ada endpoint `GET /api/queues` umum pada route saat ini. Loyalty selalu mengambil `user_id` dari JWT, bukan dari request.
 
-Untuk menjalankan pengujian API:
+Poin diberikan satu kali ketika booking berstatus `completed`: `floor(total_price / LOYALTY_RUPIAH_PER_POINT)`. Default konfigurasi adalah `LOYALTY_RUPIAH_PER_POINT=10000`, sehingga satu poin diberikan per setiap Rp10.000 pada `bookings.total_price`; pecahan dibulatkan ke bawah dan hasil nol tidak dicatat. Transaksi earn menyimpan poin positif, sedangkan redeem menyimpan poin negatif pada ledger. `cancelled` dan `no_show` tidak memperoleh poin.
+
+Dokumentasi Swagger tersedia setelah API berjalan di `http://localhost:3000/api-docs`.
+
+### Menyiapkan dan menjalankan API
+
+Gunakan Node.js/npm yang kompatibel dengan dependency project dan PostgreSQL yang dapat diakses dari mesin lokal.
 
 ```powershell
 cd API
+npm ci
+Copy-Item .env.example .env
+```
+
+Edit `API/.env` secara lokal: isi konfigurasi PostgreSQL dan ganti `JWT_SECRET` dengan nilai acak yang kuat. Sesuaikan nilai contoh, termasuk port database, dengan lingkungan Anda. Jangan commit atau membagikan `.env`; file tersebut diabaikan Git.
+
+Untuk database baru yang masih kosong, buat database terlebih dahulu, lalu jalankan semua file SQL secara berurutan. Contoh PowerShell berikut memakai nilai contoh `.env.example`; sesuaikan koneksi dengan database Anda. `psql` akan meminta password bila diperlukan.
+
+```powershell
+$dbHost = "127.0.0.1"
+$dbPort = "5433"
+$dbName = "cukurin_db"
+$dbUser = "postgres"
+
+Get-ChildItem .\database\migrations\*.sql |
+  Sort-Object Name |
+  ForEach-Object {
+    psql -h $dbHost -p $dbPort -U $dbUser -d $dbName `
+      -v ON_ERROR_STOP=1 -f $_.FullName
+    if ($LASTEXITCODE -ne 0) {
+      throw "Migration gagal: $($_.Name)"
+    }
+  }
+```
+
+**Jangan jalankan ulang seluruh urutan tersebut pada database yang sudah berisi data.** Backup dahulu, periksa schema dan riwayat migration aktual, lalu terapkan hanya perubahan yang belum ada. Repository ini belum menyediakan migration runner/ledger umum; `API/scripts/applyQueueMigration015.js` hanya menangani migration 015 dan mengharapkan tabel `schema_migrations` sudah tersedia. Jangan jalankan helper itu sebelum memastikan prasyarat dan kondisi database.
+
+Database Stage E2 yang sudah menerapkan migration 001–015 hanya memerlukan migration 016 berikut, bukan menjalankan ulang migration lama:
+
+```powershell
+psql -h 127.0.0.1 -p 5433 -U postgres -d cukurin_db `
+  -v ON_ERROR_STOP=1 -f .\database\migrations\016_unique_loyalty_earn_per_booking.sql
+```
+
+Sesuaikan parameter koneksi dengan database lokal; `psql` dapat meminta password. Migration 016 menambahkan unique partial index agar satu booking hanya memiliki satu transaksi `earn`. Jika database mungkin sudah berisi transaksi poin, periksa duplikasi `earn` terlebih dahulu dan evaluasi secara manual sebelum membuat index; jangan menghapus atau menggabungkan data secara otomatis.
+
+Setelah database siap, jalankan API:
+
+```powershell
+npm start
+```
+
+Server memeriksa koneksi database saat startup. Mode pengembangan tersedia melalui `npm run dev`.
+
+### Test
+
+```powershell
 npm test
 ```
 
-Untuk membuat atau memperbarui satu akun barber seed, isi `SEED_BARBER_NAME`, `SEED_BARBER_EMAIL`, `SEED_BARBER_PHONE`, dan `SEED_BARBER_PASSWORD` secara lokal pada `API/.env`, kemudian jalankan:
+Test PostgreSQL integration dilewati secara default. Untuk menjalankannya, gunakan database test terisolasi yang sudah dimigrasikan—jangan gunakan database produksi—dan set flag yang sesuai:
+
+```powershell
+$env:RUN_POSTGRES_INTEGRATION = "1"
+node --test test/queuePostgres.integration.test.js
+Remove-Item Env:RUN_POSTGRES_INTEGRATION
+
+$env:RUN_POSTGRES_REVIEW_INTEGRATION = "1"
+node --test test/reviewPostgres.integration.test.js
+Remove-Item Env:RUN_POSTGRES_REVIEW_INTEGRATION
+
+$env:RUN_POSTGRES_LOYALTY_INTEGRATION = "1"
+node --test test/loyaltyPostgres.integration.test.js
+Remove-Item Env:RUN_POSTGRES_LOYALTY_INTEGRATION
+```
+
+Integration loyalty memerlukan migration 016 dan database test yang sudah dimigrasikan. Test membuat fixture dengan identitas unik dan hanya membersihkan row fixture yang dibuatnya; jangan arahkan ke database produksi.
+
+### Audit dependency
+
+`API/audit-report.json` adalah laporan tersimpan dan tidak dihapus. Laporan tersebut mencatat 8 temuan pada saat dibuat (5 high dan 3 moderate); angka ini dapat kedaluwarsa. Jika memerlukan status terkini, jalankan `npm audit` dari folder `API` dan evaluasi hasilnya sebelum memperbarui dependency.
+
+## 7. Status Pengembangan
+
+Source API untuk authentication, barber dan schedule management, booking, queue/Smart ETA, QR check-in, review dan rating, serta loyalty points tersedia di repository. Source Flutter dan backend terpisah belum tersedia pada folder `Frontend/` dan `Backend/` saat ini; keduanya hanya berisi `.gitkeep`.
+
+Opsional, untuk membuat atau memperbarui satu akun barber seed, isi `SEED_BARBER_NAME`, `SEED_BARBER_EMAIL`, `SEED_BARBER_PHONE`, dan `SEED_BARBER_PASSWORD` di `API/.env`, lalu jalankan dari folder `API/`:
 
 ```powershell
 npm run seed:barber
 ```
 
-Password di-hash dengan bcryptjs. Seed menggunakan transaksi, tidak mempromosikan akun non-barber, dan tidak mengubah file `.env` atau migration.
-
-## 7. Status Pengembangan
-
-API autentikasi, layanan, barber, jadwal barber, dan reservasi memiliki implementasi dasar. Queue/antrean, QR check-in, dan dashboard role belum diimplementasikan; frontend Flutter masih perlu diintegrasikan dengan endpoint API.
+Seed meng-hash password dengan bcryptjs dan menggunakan transaksi. Jangan menyimpan credential seed di Git.

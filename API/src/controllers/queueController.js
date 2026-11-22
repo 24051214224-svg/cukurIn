@@ -4,6 +4,9 @@ const {
   qrTokenSchema,
   checkInByTokenSchema,
 } = require("../validators/queueValidator");
+const {
+  awardCompletedBookingPoints,
+} = require("../services/loyaltyService");
 
 const BUSINESS_TIME_ZONE = process.env.BUSINESS_TIME_ZONE || "Asia/Jakarta";
 const ACTIVE_STATUSES = ["waiting", "called", "serving"];
@@ -431,6 +434,9 @@ const changeQueueStatus = async (req, res, nextStatus) => {
            WHERE id = $1`,
           [current.booking_id, bookingStatus]
         );
+      }
+      if (bookingStatus === "completed") {
+        await awardCompletedBookingPoints(client, current.booking_id);
       }
       await refreshQueueEta(client, current.barber_id, current.queue_date);
       return loadQueueDetails(client, current.id);

@@ -37,6 +37,7 @@ const swaggerSpec = swaggerJsdoc({
       { name: "Bookings" },
       { name: "Queues" },
       { name: "Reviews" },
+      { name: "Loyalty" },
     ],
     components: {
       securitySchemes: {
@@ -223,6 +224,36 @@ const swaggerSpec = swaggerJsdoc({
                 created_at: { type: "string", format: "date-time" },
                 customer_name: { type: "string" },
                 barber_name: { type: "string" },
+              },
+            },
+            LoyaltyRedeemRequest: {
+              type: "object",
+              required: ["points"],
+              additionalProperties: false,
+              properties: {
+                points: {
+                  type: "integer",
+                  minimum: 1,
+                  maximum: 2147483647,
+                  description: "Jumlah poin positif yang akan ditukar.",
+                },
+              },
+            },
+            LoyaltyTransaction: {
+              type: "object",
+              properties: {
+                id: { type: "string", format: "uuid" },
+                booking_id: { type: "string", format: "uuid", nullable: true },
+                transaction_type: {
+                  type: "string",
+                  enum: ["earn", "redeem", "adjustment"],
+                },
+                points: {
+                  type: "integer",
+                  description: "Earn bernilai positif; redeem bernilai negatif.",
+                },
+                description: { type: "string", nullable: true },
+                created_at: { type: "string", format: "date-time" },
               },
             },
           },
@@ -750,6 +781,69 @@ const swaggerSpec = swaggerJsdoc({
             401: response("JWT tidak valid atau tidak tersedia."),
             404: response("Review tidak ditemukan atau tidak dapat diakses."),
             500: response("Gagal mengambil detail review."),
+          },
+        },
+      },
+      "/api/loyalty/balance": {
+        get: {
+          tags: ["Loyalty"],
+          summary: "Lihat saldo poin customer yang login",
+          description:
+            "Saldo selalu dibatasi pada customer dari JWT; endpoint tidak menerima user_id.",
+          security: [{ bearerAuth: [] }],
+          responses: {
+            200: response("Saldo poin customer."),
+            401: response("JWT tidak valid atau tidak tersedia."),
+            403: response("Hanya customer yang dapat mengakses endpoint ini."),
+            500: response("Gagal mengambil saldo poin."),
+          },
+        },
+      },
+      "/api/loyalty/history": {
+        get: {
+          tags: ["Loyalty"],
+          summary: "Lihat riwayat poin customer yang login",
+          description:
+            "Riwayat selalu dibatasi pada customer dari JWT. Pagination default limit 50, maksimum 100.",
+          security: [{ bearerAuth: [] }],
+          parameters: [
+            {
+              name: "limit",
+              in: "query",
+              schema: { type: "integer", minimum: 1, maximum: 100, default: 50 },
+            },
+            {
+              name: "offset",
+              in: "query",
+              schema: { type: "integer", minimum: 0, default: 0 },
+            },
+          ],
+          responses: {
+            200: response("Riwayat transaksi poin customer."),
+            400: response("Parameter riwayat tidak valid."),
+            401: response("JWT tidak valid atau tidak tersedia."),
+            403: response("Hanya customer yang dapat mengakses endpoint ini."),
+            500: response("Gagal mengambil riwayat poin."),
+          },
+        },
+      },
+      "/api/loyalty/redeem": {
+        post: {
+          tags: ["Loyalty"],
+          summary: "Tukar poin customer yang login",
+          description:
+            "Poin request harus positif. User ditentukan dari JWT; redeem disimpan sebagai transaksi poin negatif.",
+          security: [{ bearerAuth: [] }],
+          requestBody: jsonRequestBody({
+            $ref: "#/components/schemas/LoyaltyRedeemRequest",
+          }),
+          responses: {
+            201: response("Penukaran poin berhasil."),
+            400: response("Jumlah poin tidak valid atau body memuat field tambahan."),
+            401: response("JWT tidak valid atau tidak tersedia."),
+            403: response("Hanya customer aktif yang dapat menukar poin."),
+            409: response("Saldo poin tidak mencukupi."),
+            500: response("Gagal menukar poin."),
           },
         },
       },

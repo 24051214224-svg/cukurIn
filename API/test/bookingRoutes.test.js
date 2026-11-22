@@ -560,6 +560,55 @@ test("barber status changes require ownership and a valid state transition", asy
   assert.equal(transactionCalls.at(-1).sql, "ROLLBACK");
 });
 
+test("completed booking awards points to its customer in the booking transaction", async () => {
+  useMockTransaction(async (sql, params) => {
+    if (sql === "BEGIN" || sql === "COMMIT" || sql === "ROLLBACK") {
+      return { rows: [] };
+    }
+    if (sql.includes("SELECT barber_id FROM bookings")) {
+      return { rows: [{ barber_id: barberId }] };
+    }
+    if (sql.includes("FROM barbers") && sql.includes("FOR UPDATE")) {
+      return { rows: [{ id: barberId, user_id: barberUserId }] };
+    }
+    if (sql.includes("SELECT id, status, start_at")) {
+      return {
+        rows: [{
+          id: bookingId,
+          status: "in_progress",
+          start_at: new Date(Date.now() - 60_000).toISOString(),
+          has_started: true,
+        }],
+      };
+    }
+    if (sql.includes("SET status = $2")) {
+      return { rows: [{ id: bookingId, status: "completed" }] };
+    }
+    if (sql.includes("FROM bookings b") && sql.includes("total_price")) {
+      return { rows: [{ customer_id: customerId, total_price: "25999.99" }] };
+    }
+    if (sql.includes("INSERT INTO loyalty_points")) {
+      return { rows: [{ booking_id: params[1], points: params[2] }] };
+    }
+    if (sql.includes("SELECT queue_date, barber_id")) {
+      return { rows: [] };
+    }
+    return { rows: [] };
+  });
+
+  const response = await fetch(`${baseUrl}/api/bookings/${bookingId}/status`, {
+    method: "PATCH",
+    headers: {
+      ...adminHeaders(),
+    },
+    body: JSON.stringify({ status: "completed" }),
+  });
+  assert.equal(response.status, 200);
+  const earn = transactionCalls.find((call) => call.sql.includes("INSERT INTO loyalty_points"));
+  assert.deepEqual(earn.params, [customerId, bookingId, 2]);
+  assert.equal(transactionCalls.at(-1).sql, "COMMIT");
+});
+
 test("admin can mark a booking no-show only after its start time", async () => {
   let bookingStart = futureStartAt();
   useMockTransaction(async (sql) => {

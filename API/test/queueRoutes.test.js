@@ -255,6 +255,12 @@ test("queue completion synchronizes the completed booking", async () => {
       assert.equal(params[1], "completed");
       return { rows: [{ id: bookingId, status: "completed" }] };
     }
+    if (sql.includes("FROM bookings b") && sql.includes("total_price")) {
+      return { rows: [{ customer_id: customerId, total_price: "25000.00" }] };
+    }
+    if (sql.includes("INSERT INTO loyalty_points")) {
+      return { rows: [{ booking_id: bookingId, points: params[2] }] };
+    }
     if (sql.includes("FROM queues q") && sql.includes("duration_minutes")) return { rows: [] };
     if (sql.includes("FROM booking_items")) return { rows: [] };
     if (sql.includes("FROM queues q") && sql.includes("WHERE q.id = $1")) {
@@ -272,6 +278,8 @@ test("queue completion synchronizes the completed booking", async () => {
   assert.equal(response.status, 200);
   assert.equal(transactionCalls.some((call) =>
     call.sql.includes("UPDATE bookings") && call.params?.[1] === "completed"), true);
+  const earn = transactionCalls.find((call) => call.sql.includes("INSERT INTO loyalty_points"));
+  assert.deepEqual(earn.params, [customerId, bookingId, 2]);
 });
 
 test("Smart ETA includes serving duration and excludes completed/cancelled queues", async () => {

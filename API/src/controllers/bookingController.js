@@ -11,6 +11,9 @@ const {
   createQueueForConfirmedBooking,
   refreshQueueEta,
 } = require("./queueController");
+const {
+  awardCompletedBookingPoints,
+} = require("../services/loyaltyService");
 
 const BUSINESS_TIME_ZONE = process.env.BUSINESS_TIME_ZONE || "Asia/Jakarta";
 const businessTimeFormatter = new Intl.DateTimeFormat("en-US", {
@@ -746,6 +749,10 @@ const updateBookingStatus = async (req, res) => {
          RETURNING id, status, updated_at`,
         [idValidation.data, validation.data.status]
       );
+
+      if (validation.data.status === "completed") {
+        await awardCompletedBookingPoints(client, idValidation.data);
+      }
 
       if (validation.data.status === "confirmed") {
         await createQueueForConfirmedBooking(client, idValidation.data);
