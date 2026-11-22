@@ -1,5 +1,6 @@
 const crypto = require("node:crypto");
 const pool = require("../config/database");
+const HttpError = require("../utils/HttpError");
 const {
   bookingIdSchema,
   bookingStatusSchema,
@@ -14,6 +15,11 @@ const {
 const {
   awardCompletedBookingPoints,
 } = require("../services/loyaltyService");
+const { loadActiveServices } = require("../services/bookingPricingService");
+const {
+  reserveVoucher,
+  releaseVoucherUsage,
+} = require("../services/voucherService");
 
 const BUSINESS_TIME_ZONE = process.env.BUSINESS_TIME_ZONE || "Asia/Jakarta";
 const businessTimeFormatter = new Intl.DateTimeFormat("en-US", {
@@ -37,12 +43,7 @@ const WEEKDAY_NUMBERS = {
   Sat: 6,
 };
 
-class RequestError extends Error {
-  constructor(statusCode, message) {
-    super(message);
-    this.statusCode = statusCode;
-  }
-}
+class RequestError extends HttpError {}
 
 const withTransaction = async (operation, label) => {
   const client = await pool.connect();
@@ -66,7 +67,7 @@ const withTransaction = async (operation, label) => {
 };
 
 const respondWithDatabaseError = (res, error, operation, message) => {
-  if (error instanceof RequestError) {
+  if (error instanceof HttpError) {
     return res.status(error.statusCode).json({
       success: false,
       message: error.message,
@@ -136,56 +137,6 @@ const lockAvailableBarber = async (client, barberId) => {
   }
 
   return result.rows[0];
-};
-
-const loadActiveServices = async (client, items) => {
-  const serviceIds = items.map((item) => item.service_id);
-  const result = await client.query(
-    `SELECT id, service_name, price, duration_minutes
-     FROM services
-     WHERE id = ANY($1::uuid[]) AND is_active = TRUE
-     ORDER BY id
-     FOR SHARE`,
-    [serviceIds]
-  );
-
-  if (result.rows.length !== items.length) {
-    throw new RequestError(409, "Satu atau lebih layanan tidak aktif");
-  }
-
-  const servicesById = new Map(
-    result.rows.map((service) => [service.id, service])
-  );
-  const itemSnapshots = items.map((item) => {
-    const service = servicesById.get(item.service_id);
-    return { ...service, quantity: item.quantity };
-  });
-
-  const totalDuration = itemSnapshots.reduce(
-    (total, item) => total + Number(item.duration_minutes) * item.quantity,
-    0
-  );
-
-  if (!Number.isSafeInteger(totalDuration) || totalDuration <= 0) {
-    throw new RequestError(409, "Durasi layanan tidak valid");
-  }
-
-  const totalPriceCents = itemSnapshots.reduce((total, item) => {
-    const [whole, fraction = ""] = String(item.price).split(".");
-    const unitPriceCents = Number(whole) * 100 +
-      Number(fraction.padEnd(2, "0").slice(0, 2));
-    return total + unitPriceCents * item.quantity;
-  }, 0);
-
-  if (!Number.isSafeInteger(totalPriceCents)) {
-    throw new RequestError(409, "Total harga layanan di luar batas");
-  }
-
-  return {
-    itemSnapshots,
-    totalDuration,
-    totalPrice: (totalPriceCents / 100).toFixed(2),
-  };
 };
 
 const assertScheduleCoversBooking = async (
@@ -261,6 +212,16 @@ const getBookingDetails = async (client, bookingId) => {
             b.end_at,
             b.status,
             b.total_price,
+            b.voucher_id,
+            v.code AS voucher_code,
+            CASE WHEN b.voucher_id IS NULL THEN 0::numeric
+                 ELSE GREATEST(
+                   COALESCE((SELECT SUM(bi.subtotal)
+                             FROM booking_items bi
+                             WHERE bi.booking_id = b.id), 0) - b.total_price,
+                   0
+                 )
+            END AS discount_amount,
             b.notes,
             b.created_at,
             b.updated_at
@@ -268,6 +229,7 @@ const getBookingDetails = async (client, bookingId) => {
      JOIN users customer ON customer.id = b.customer_id
      JOIN barbers barber ON barber.id = b.barber_id
      JOIN users barber_user ON barber_user.id = barber.user_id
+     LEFT JOIN vouchers v ON v.id = b.voucher_id
      WHERE b.id = $1`,
     [bookingId]
   );
@@ -408,6 +370,16 @@ const getBookingById = async (req, res) => {
               b.end_at,
               b.status,
               b.total_price,
+              b.voucher_id,
+              v.code AS voucher_code,
+              CASE WHEN b.voucher_id IS NULL THEN 0::numeric
+                   ELSE GREATEST(
+                     COALESCE((SELECT SUM(bi.subtotal)
+                               FROM booking_items bi
+                               WHERE bi.booking_id = b.id), 0) - b.total_price,
+                     0
+                   )
+              END AS discount_amount,
               b.notes,
               b.created_at,
               b.updated_at
@@ -415,6 +387,7 @@ const getBookingById = async (req, res) => {
        JOIN users customer ON customer.id = b.customer_id
        JOIN barbers barber ON barber.id = b.barber_id
        JOIN users barber_user ON barber_user.id = barber.user_id
+       LEFT JOIN vouchers v ON v.id = b.voucher_id
        WHERE b.id = $1 ${condition}`,
       values
     );
@@ -472,8 +445,19 @@ const createBooking = async (req, res) => {
     const createdBooking = await withTransaction(async (client) => {
       await lockCustomer(client, req.user.id);
       await lockAvailableBarber(client, booking.barber_id);
-      const { itemSnapshots, totalDuration, totalPrice } =
+      const { itemSnapshots, totalDuration, totalPriceCents } =
         await loadActiveServices(client, booking.items);
+      let totalPrice = (totalPriceCents / 100).toFixed(2);
+      let voucherId = null;
+      if (booking.voucher_code) {
+        const reservedVoucher = await reserveVoucher(
+          client,
+          booking.voucher_code,
+          totalPriceCents
+        );
+        voucherId = reservedVoucher.voucher.id;
+        totalPrice = reservedVoucher.totalPrice;
+      }
 
       if (totalDuration > 24 * 60) {
         throw new RequestError(409, "Durasi layanan melebihi satu hari");
@@ -503,10 +487,10 @@ const createBooking = async (req, res) => {
       const bookingResult = await client.query(
         `INSERT INTO bookings (
            customer_id, barber_id, booking_code, start_at, end_at,
-           status, total_price, notes
+           status, total_price, notes, voucher_id
          )
          VALUES ($1, $2, $3, $4::timestamptz, $5::timestamptz,
-                 'pending', $6, $7)
+                 'pending', $6, $7, $8)
          RETURNING id`,
         [
           req.user.id,
@@ -516,6 +500,7 @@ const createBooking = async (req, res) => {
           endAt.toISOString(),
           totalPrice,
           booking.notes ?? null,
+          voucherId,
         ]
       );
       const bookingId = bookingResult.rows[0].id;
@@ -595,7 +580,7 @@ const cancelBooking = async (req, res) => {
     const booking = await withTransaction(async (client) => {
       await lockBookingBarber(client, validation.data);
       const currentResult = await client.query(
-        `SELECT id, status
+        `SELECT id, status, voucher_id
          FROM bookings
          WHERE id = $1 AND customer_id = $2
          FOR UPDATE`,
@@ -628,6 +613,10 @@ const cancelBooking = async (req, res) => {
           409,
           "Reservasi sudah dimulai atau statusnya telah berubah"
         );
+      }
+
+      if (currentResult.rows[0].voucher_id) {
+        await releaseVoucherUsage(client, currentResult.rows[0].voucher_id);
       }
 
       await client.query(
@@ -712,7 +701,7 @@ const updateBookingStatus = async (req, res) => {
       }
 
       const currentResult = await client.query(
-        `SELECT id, status, start_at,
+        `SELECT id, status, start_at, voucher_id,
                 start_at <= statement_timestamp() AS has_started
          FROM bookings
          WHERE id = $1
@@ -759,6 +748,9 @@ const updateBookingStatus = async (req, res) => {
       }
 
       if (validation.data.status === "cancelled") {
+        if (current.voucher_id) {
+          await releaseVoucherUsage(client, current.voucher_id);
+        }
         await client.query(
           `UPDATE queues
            SET status = 'cancelled',

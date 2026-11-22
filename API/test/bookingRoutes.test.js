@@ -79,6 +79,8 @@ const configureCreateTransaction = ({
   ],
   schedules = [{ id: "available-schedule" }],
   conflicts = [],
+  voucher = null,
+  bookingTotalPrice = "25000.00",
 } = {}) => {
   const insertedItems = [];
   let insertedBookingId;
@@ -95,6 +97,12 @@ const configureCreateTransaction = ({
     }
     if (sql.includes("FROM services")) {
       return { rows: services };
+    }
+    if (sql.includes("FROM vouchers")) {
+      return { rows: voucher ? [voucher] : [] };
+    }
+    if (sql.includes("SET used_count = used_count + 1")) {
+      return { rows: [{ used_count: 1 }] };
     }
     if (sql.includes("FROM schedules")) {
       return { rows: schedules };
@@ -123,7 +131,10 @@ const configureCreateTransaction = ({
             start_at: params[0],
             end_at: params[0],
             status: "pending",
-            total_price: "25000.00",
+            total_price: bookingTotalPrice,
+            voucher_id: voucher?.id ?? null,
+            voucher_code: voucher?.code ?? null,
+            discount_amount: "0.00",
             notes: null,
             created_at: "2026-11-18T00:00:00.000Z",
             updated_at: "2026-11-18T00:00:00.000Z",
@@ -233,6 +244,95 @@ test("customer creates a booking using database service price and duration", asy
   assert.match(serviceLookup.sql, /is_active = TRUE/);
   assert.equal(transactionCalls[0].sql, "BEGIN");
   assert.equal(transactionCalls.at(-1).sql, "COMMIT");
+});
+
+test("booking applies a normalized voucher and reserves its quota atomically", async () => {
+  const voucher = {
+    id: "936fd05a-c130-40e7-9e0a-71d8084c77c4",
+    code: "SAVE10",
+    discount_type: "percentage",
+    discount_value: "10.00",
+    minimum_transaction: "0.00",
+    max_discount: "1000.00",
+    usage_limit: 5,
+    used_count: 2,
+    start_at: new Date(Date.now() - 60_000),
+    end_at: new Date(Date.now() + 60 * 60_000),
+    is_active: true,
+    evaluated_at: new Date(),
+  };
+  configureCreateTransaction({
+    voucher,
+    bookingTotalPrice: "24000.00",
+  });
+
+  const response = await fetch(`${baseUrl}/api/bookings`, {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${createToken("customer")}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify(createRequestBody({ voucher_code: "  save10 " })),
+  });
+  const body = await response.json();
+
+  assert.equal(response.status, 201);
+  assert.equal(body.data.total_price, "24000.00");
+  assert.equal(body.data.voucher_code, "SAVE10");
+  const reserve = transactionCalls.find((call) =>
+    call.sql.includes("FROM vouchers")
+  );
+  assert.equal(reserve.params[0], "SAVE10");
+  const increment = transactionCalls.find((call) =>
+    call.sql.includes("SET used_count = used_count + 1")
+  );
+  const bookingInsert = transactionCalls.find((call) =>
+    call.sql.includes("INSERT INTO bookings")
+  );
+  assert.ok(increment);
+  assert.equal(bookingInsert.params[5], "24000.00");
+  assert.equal(
+    bookingInsert.params[7],
+    "936fd05a-c130-40e7-9e0a-71d8084c77c4"
+  );
+  assert.equal(transactionCalls.at(-1).sql, "COMMIT");
+});
+
+test("failed booking rolls back its voucher quota reservation", async () => {
+  const voucher = {
+    id: "936fd05a-c130-40e7-9e0a-71d8084c77c4",
+    code: "SAVE10",
+    discount_type: "fixed",
+    discount_value: "5000.00",
+    minimum_transaction: "0.00",
+    max_discount: null,
+    usage_limit: 5,
+    used_count: 0,
+    start_at: new Date(Date.now() - 60_000),
+    end_at: new Date(Date.now() + 60 * 60_000),
+    is_active: true,
+    evaluated_at: new Date(),
+  };
+  configureCreateTransaction({ voucher, schedules: [] });
+
+  const response = await fetch(`${baseUrl}/api/bookings`, {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${createToken("customer")}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify(createRequestBody({ voucher_code: "SAVE10" })),
+  });
+
+  assert.equal(response.status, 409);
+  assert.ok(transactionCalls.some((call) =>
+    call.sql.includes("SET used_count = used_count + 1")
+  ));
+  assert.equal(
+    transactionCalls.some((call) => call.sql.includes("INSERT INTO bookings")),
+    false
+  );
+  assert.equal(transactionCalls.at(-1).sql, "ROLLBACK");
 });
 
 test("rejects malformed, duplicate, or past booking input before database access", async () => {
@@ -410,6 +510,7 @@ test("customer sees booking details with item snapshots and cannot see another b
 
 test("customer cancellation is limited to pending or confirmed future bookings", async () => {
   const statusToReturn = { value: "confirmed" };
+  const voucherId = "936fd05a-c130-40e7-9e0a-71d8084c77c4";
   useMockTransaction(async (sql) => {
     if (sql === "BEGIN" || sql === "COMMIT" || sql === "ROLLBACK") {
       return { rows: [] };
@@ -421,10 +522,19 @@ test("customer cancellation is limited to pending or confirmed future bookings",
       return { rows: [{ id: barberId, user_id: barberUserId }] };
     }
     if (sql.includes("customer_id = $2") && sql.includes("FOR UPDATE")) {
-      return { rows: [{ id: bookingId, status: statusToReturn.value }] };
+      return {
+        rows: [{
+          id: bookingId,
+          status: statusToReturn.value,
+          voucher_id: voucherId,
+        }],
+      };
     }
     if (sql.includes("SET status = 'cancelled'")) {
       return { rows: [{ id: bookingId, status: "cancelled" }] };
+    }
+    if (sql.includes("SET used_count = used_count - 1")) {
+      return { rows: [{ id: voucherId }] };
     }
     return { rows: [] };
   });
@@ -435,6 +545,12 @@ test("customer cancellation is limited to pending or confirmed future bookings",
   });
   assert.equal(response.status, 200);
   assert.equal(transactionCalls.at(-1).sql, "COMMIT");
+  assert.equal(
+    transactionCalls.filter((call) =>
+      call.sql.includes("SET used_count = used_count - 1")
+    ).length,
+    1
+  );
 
   transactionCalls = [];
   statusToReturn.value = "in_progress";
@@ -444,6 +560,12 @@ test("customer cancellation is limited to pending or confirmed future bookings",
   });
   assert.equal(rejected.status, 409);
   assert.equal(transactionCalls.at(-1).sql, "ROLLBACK");
+  assert.equal(
+    transactionCalls.some((call) =>
+      call.sql.includes("SET used_count = used_count - 1")
+    ),
+    false
+  );
 });
 
 test("barber status changes require ownership and a valid state transition", async () => {
@@ -628,6 +750,7 @@ test("admin can mark a booking no-show only after its start time", async () => {
             id: bookingId,
             status: "confirmed",
             start_at: bookingStart,
+            voucher_id: "936fd05a-c130-40e7-9e0a-71d8084c77c4",
             has_started: new Date(bookingStart).getTime() <= Date.now(),
           },
         ],
@@ -658,6 +781,12 @@ test("admin can mark a booking no-show only after its start time", async () => {
   const afterStart = await request();
   assert.equal(afterStart.status, 200);
   assert.equal(transactionCalls.at(-1).sql, "COMMIT");
+  assert.equal(
+    transactionCalls.some((call) =>
+      call.sql.includes("SET used_count = used_count - 1")
+    ),
+    false
+  );
 });
 
 test("concurrent requests for the same barber and time cannot double-book", async () => {

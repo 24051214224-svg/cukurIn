@@ -50,6 +50,8 @@ app.use("/api/barbers", require("./routes/barberRoutes"));
 
 app.use("/api/bookings", require("./routes/bookingRoutes"));
 
+app.use("/api/vouchers", require("./routes/voucherRoutes"));
+
 app.use("/api/queues", require("./routes/queueRoutes"));
 
 app.use("/api/reviews", require("./routes/reviewRoutes"));

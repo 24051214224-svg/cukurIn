@@ -35,6 +35,7 @@ const swaggerSpec = swaggerJsdoc({
       { name: "Services" },
       { name: "Barbers" },
       { name: "Bookings" },
+      { name: "Vouchers" },
       { name: "Queues" },
       { name: "Reviews" },
       { name: "Loyalty" },
@@ -181,6 +182,94 @@ const swaggerSpec = swaggerJsdoc({
               items: { $ref: "#/components/schemas/BookingItemRequest" },
             },
             notes: { type: "string", maxLength: 1000, nullable: true },
+            voucher_code: {
+              type: "string",
+              maxLength: 30,
+              description:
+                "Opsional; dinormalisasi dengan trim dan uppercase. Harga/diskon dihitung backend.",
+            },
+          },
+        },
+        VoucherDefinitionRequest: {
+          type: "object",
+          required: [
+            "code",
+            "discount_type",
+            "discount_value",
+            "usage_limit",
+            "start_at",
+            "end_at",
+          ],
+          properties: {
+            code: { type: "string", minLength: 1, maxLength: 30 },
+            description: { type: "string", nullable: true },
+            discount_type: { type: "string", enum: ["percentage", "fixed"] },
+            discount_value: {
+              type: "number",
+              exclusiveMinimum: 0,
+              maximum: 9999999999.99,
+              description:
+                "Untuk percentage, nilainya maksimum 100; untuk fixed, nominal diskon.",
+            },
+            minimum_transaction: {
+              type: "number",
+              minimum: 0,
+              maximum: 9999999999.99,
+              default: 0,
+            },
+            max_discount: {
+              type: "number",
+              exclusiveMinimum: 0,
+              maximum: 9999999999.99,
+              nullable: true,
+              description: "Hanya berlaku untuk voucher percentage.",
+            },
+            usage_limit: { type: "integer", minimum: 1, maximum: 2147483647 },
+            start_at: { type: "string", format: "date-time" },
+            end_at: { type: "string", format: "date-time" },
+            is_active: { type: "boolean", default: true },
+          },
+        },
+        VoucherUpdateRequest: {
+          type: "object",
+          minProperties: 1,
+          properties: {
+            code: { type: "string", minLength: 1, maxLength: 30 },
+            description: { type: "string", nullable: true },
+            discount_type: { type: "string", enum: ["percentage", "fixed"] },
+            discount_value: {
+              type: "number",
+              exclusiveMinimum: 0,
+              maximum: 9999999999.99,
+            },
+            minimum_transaction: {
+              type: "number",
+              minimum: 0,
+              maximum: 9999999999.99,
+            },
+            max_discount: {
+              type: "number",
+              exclusiveMinimum: 0,
+              maximum: 9999999999.99,
+              nullable: true,
+            },
+            usage_limit: { type: "integer", minimum: 1, maximum: 2147483647 },
+            start_at: { type: "string", format: "date-time" },
+            end_at: { type: "string", format: "date-time" },
+            is_active: { type: "boolean" },
+          },
+        },
+        ValidateVoucherRequest: {
+          type: "object",
+          required: ["code", "items"],
+          properties: {
+            code: { type: "string", minLength: 1, maxLength: 30 },
+            items: {
+              type: "array",
+              minItems: 1,
+              maxItems: 10,
+              items: { $ref: "#/components/schemas/BookingItemRequest" },
+            },
           },
         },
         BookingStatusRequest: {
@@ -619,7 +708,7 @@ const swaggerSpec = swaggerJsdoc({
           tags: ["Bookings"],
           summary: "Buat reservasi customer",
           description:
-            "Harga dan durasi dihitung dari layanan aktif di database. Pembuatan reservasi tidak membuat antrean.",
+            "Harga dan durasi dihitung dari layanan aktif di database. Voucher opsional diterapkan dan kuotanya dikonsumsi dalam transaksi yang sama. Pembuatan reservasi tidak membuat antrean.",
           security: [{ bearerAuth: [] }],
           requestBody: jsonRequestBody({
             $ref: "#/components/schemas/CreateBookingRequest",
@@ -667,7 +756,7 @@ const swaggerSpec = swaggerJsdoc({
           tags: ["Bookings"],
           summary: "Batalkan reservasi milik customer",
           description:
-            "Hanya reservasi pending atau confirmed yang belum dimulai yang dapat dibatalkan.",
+            "Hanya reservasi pending atau confirmed yang belum dimulai yang dapat dibatalkan. Jika memakai voucher, kuota dikembalikan tepat satu kali.",
           security: [{ bearerAuth: [] }],
           responses: {
             200: response("Reservasi berhasil dibatalkan."),
@@ -691,7 +780,7 @@ const swaggerSpec = swaggerJsdoc({
           tags: ["Bookings"],
           summary: "Ubah status reservasi (barber yang ditugaskan atau admin)",
           description:
-            "Transisi dibatasi: pending ke confirmed/cancelled; confirmed ke in_progress/cancelled/no_show oleh admin (in_progress oleh barber); in_progress ke completed. Status no_show hanya dapat diberikan admin setelah waktu mulai.",
+            "Transisi dibatasi: pending ke confirmed/cancelled; confirmed ke in_progress/cancelled/no_show oleh admin (in_progress oleh barber); in_progress ke completed. Pembatalan mengembalikan kuota voucher satu kali, sedangkan no_show tidak. Status no_show hanya dapat diberikan admin setelah waktu mulai.",
           security: [{ bearerAuth: [] }],
           requestBody: jsonRequestBody({
             $ref: "#/components/schemas/BookingStatusRequest",
@@ -703,6 +792,94 @@ const swaggerSpec = swaggerJsdoc({
             403: response("Role tidak dapat mengubah status reservasi."),
             404: response("Reservasi tidak ditemukan atau bukan milik barber."),
             409: response("Transisi status tidak diizinkan."),
+          },
+        },
+      },
+      "/api/vouchers": {
+        get: {
+          tags: ["Vouchers"],
+          summary: "Daftar voucher (admin)",
+          security: [{ bearerAuth: [] }],
+          responses: {
+            200: response("Daftar voucher."),
+            401: response("JWT tidak valid atau tidak tersedia."),
+            403: response("Hanya admin yang dapat mengelola voucher."),
+          },
+        },
+        post: {
+          tags: ["Vouchers"],
+          summary: "Buat voucher (admin)",
+          description:
+            "Kode dinormalisasi dengan trim dan uppercase. Batas penggunaan global wajib ditentukan.",
+          security: [{ bearerAuth: [] }],
+          requestBody: jsonRequestBody({
+            $ref: "#/components/schemas/VoucherDefinitionRequest",
+          }),
+          responses: {
+            201: response("Voucher berhasil dibuat."),
+            400: response("Data voucher tidak valid."),
+            401: response("JWT tidak valid atau tidak tersedia."),
+            403: response("Hanya admin yang dapat mengelola voucher."),
+            409: response("Kode voucher sudah digunakan."),
+          },
+        },
+      },
+      "/api/vouchers/validate": {
+        post: {
+          tags: ["Vouchers"],
+          summary: "Validasi voucher untuk daftar layanan customer",
+          description:
+            "Backend mengambil harga layanan dari database. Validasi ini tidak memesan kuota; voucher divalidasi ulang saat booking dibuat.",
+          security: [{ bearerAuth: [] }],
+          requestBody: jsonRequestBody({
+            $ref: "#/components/schemas/ValidateVoucherRequest",
+          }),
+          responses: {
+            200: response("Voucher valid beserta nilai diskon dan total."),
+            400: response("Data validasi tidak valid."),
+            401: response("JWT tidak valid atau tidak tersedia."),
+            403: response("Hanya customer yang dapat memvalidasi voucher."),
+            404: response("Voucher tidak ditemukan."),
+            409: response("Voucher tidak berlaku untuk transaksi ini."),
+          },
+        },
+      },
+      "/api/vouchers/{id}": {
+        parameters: [
+          {
+            name: "id",
+            in: "path",
+            required: true,
+            schema: { type: "string", format: "uuid" },
+          },
+        ],
+        get: {
+          tags: ["Vouchers"],
+          summary: "Detail voucher (admin)",
+          security: [{ bearerAuth: [] }],
+          responses: {
+            200: response("Detail voucher."),
+            401: response("JWT tidak valid atau tidak tersedia."),
+            403: response("Hanya admin yang dapat mengelola voucher."),
+            404: response("Voucher tidak ditemukan."),
+          },
+        },
+        patch: {
+          tags: ["Vouchers"],
+          summary: "Ubah atau aktifkan/nonaktifkan voucher (admin)",
+          description:
+            "Kirim satu atau lebih perubahan. Batas kuota tidak dapat diturunkan di bawah jumlah penggunaan yang sudah tercatat.",
+          security: [{ bearerAuth: [] }],
+          requestBody: jsonRequestBody({
+            $ref: "#/components/schemas/VoucherUpdateRequest",
+          }),
+          responses: {
+            200: response("Voucher berhasil diperbarui."),
+            400: response("Data perubahan tidak valid."),
+            401: response("JWT tidak valid atau tidak tersedia."),
+            403: response("Hanya admin yang dapat mengelola voucher."),
+            404: response("Voucher tidak ditemukan."),
+            409: response("Kode digunakan voucher lain atau batas kuota tidak valid."),
           },
         },
       },

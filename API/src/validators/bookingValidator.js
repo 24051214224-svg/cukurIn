@@ -17,6 +17,8 @@ const bookingItemSchema = z
   })
   .strict();
 
+const bookingItemsSchema = z.array(bookingItemSchema).min(1).max(10);
+
 const createBookingSchema = z
   .object({
     barber_id: z.string().uuid(),
@@ -27,8 +29,9 @@ const createBookingSchema = z
         const startAt = new Date(value);
         return startAt.getUTCSeconds() === 0 && startAt.getUTCMilliseconds() === 0;
       }, "Waktu reservasi harus tepat pada menit"),
-    items: z.array(bookingItemSchema).min(1).max(10),
+    items: bookingItemsSchema,
     notes: z.string().trim().max(1000).nullable().optional(),
+    voucher_code: z.string().trim().toUpperCase().min(1).max(30).optional(),
   })
   .strict()
   .refine(
@@ -56,6 +59,7 @@ const updateBookingStatusSchema = z
 module.exports = {
   bookingIdSchema,
   bookingStatusSchema,
+  bookingItemsSchema,
   createBookingSchema,
   bookingListQuerySchema,
   updateBookingStatusSchema,

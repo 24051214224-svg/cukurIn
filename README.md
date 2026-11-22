@@ -51,6 +51,8 @@ Pengembangan aplikasi ini diharapkan dapat meningkatkan efisiensi pengelolaan re
 - Manajemen antrean dengan estimasi waktu mulai/selesai (Smart ETA).
 - QR check-in untuk antrean.
 - Review dan rating barber.
+- Voucher persentase atau potongan tetap dengan kuota global.
+- Loyalty Points dihitung dari total booking setelah diskon.
 
 ## 5. Struktur Repository
 
@@ -79,6 +81,9 @@ Daftar berikut mengikuti route yang terpasang di `API/src/app.js` dan spesifikas
 | Booking | `GET /api/bookings`, `POST /api/bookings`, `GET /api/bookings/:id` | JWT; akses dibatasi berdasarkan role dan kepemilikan. |
 | Booking | `PATCH /api/bookings/:id/cancel` | JWT; customer, mengikuti aturan status booking. |
 | Booking | `PATCH /api/bookings/:id/status` | JWT; barber atau admin, mengikuti aturan status booking. |
+| Voucher | `GET /api/vouchers`, `GET /api/vouchers/:id`, `POST /api/vouchers`, `PATCH /api/vouchers/:id` | JWT; admin. PATCH mengubah detail atau mengaktifkan/menonaktifkan voucher. |
+| Voucher | `POST /api/vouchers/validate` | JWT; customer mengirim `code` dan `items`; backend menghitung harga dari layanan aktif. Tidak memesan kuota. |
+| Voucher | `POST /api/bookings` dengan `voucher_code` opsional | JWT; customer. Harga dan diskon dihitung backend; voucher divalidasi ulang serta kuota dikonsumsi dalam transaksi booking. |
 | Queue / Smart ETA | `GET /api/queues/my`, `GET /api/queues/:id` | JWT; antrean customer/detail sesuai role dan kepemilikan. Detail antrean memuat estimasi waktu. |
 | Queue | `GET /api/barbers/:barberId/queues/today` | JWT; barber yang ditugaskan atau admin. |
 | QR check-in | `POST /api/queues/check-in` | JWT; customer mengirim QR token. |
@@ -95,6 +100,8 @@ Daftar berikut mengikuti route yang terpasang di `API/src/app.js` dan spesifikas
 Smart ETA merupakan data pada respons antrean, bukan endpoint terpisah. Check-in memvalidasi QR token; route tidak mendokumentasikan pembuatan gambar QR. Tidak ada endpoint `GET /api/queues` umum pada route saat ini. Loyalty selalu mengambil `user_id` dari JWT, bukan dari request.
 
 Poin diberikan satu kali ketika booking berstatus `completed`: `floor(total_price / LOYALTY_RUPIAH_PER_POINT)`. Default konfigurasi adalah `LOYALTY_RUPIAH_PER_POINT=10000`, sehingga satu poin diberikan per setiap Rp10.000 pada `bookings.total_price`; pecahan dibulatkan ke bawah dan hasil nol tidak dicatat. Transaksi earn menyimpan poin positif, sedangkan redeem menyimpan poin negatif pada ledger. `cancelled` dan `no_show` tidak memperoleh poin.
+
+Kode voucher dipangkas spasi tepinya dan diubah menjadi uppercase. Voucher hanya berlaku pada periode mulai (inklusif) sampai waktu berakhir (eksklusif), dan minimum transaksi (jika tidak diisi, Rp0) dibandingkan dengan subtotal layanan sebelum diskon. Diskon percentage dibulatkan half-up ke dua desimal dan dapat dibatasi dengan `max_discount`; diskon fixed tidak dapat melebihi subtotal sehingga total tidak negatif. Batas penggunaan global wajib ditentukan saat voucher dibuat. Kuota dikonsumsi hanya ketika booking berhasil dibuat, bukan saat validasi; pembatalan booking mengembalikan satu kuota dalam transaksi yang sama, sedangkan `no_show` tidak. `bookings.total_price` menyimpan total setelah diskon, sehingga Loyalty Points tetap memakai nilai neto tersebut. Schema migration 011 sudah menyediakan kolom yang diperlukan; Stage E3 tidak menambahkan migration.
 
 Dokumentasi Swagger tersedia setelah API berjalan di `http://localhost:3000/api-docs`.
 
@@ -140,6 +147,8 @@ psql -h 127.0.0.1 -p 5433 -U postgres -d cukurin_db `
 
 Sesuaikan parameter koneksi dengan database lokal; `psql` dapat meminta password. Migration 016 menambahkan unique partial index agar satu booking hanya memiliki satu transaksi `earn`. Jika database mungkin sudah berisi transaksi poin, periksa duplikasi `earn` terlebih dahulu dan evaluasi secara manual sebelum membuat index; jangan menghapus atau menggabungkan data secara otomatis.
 
+Voucher menggunakan schema yang telah dibuat migration 011; tidak ada migration tambahan untuk Stage E3.
+
 Setelah database siap, jalankan API:
 
 ```powershell
@@ -168,9 +177,13 @@ Remove-Item Env:RUN_POSTGRES_REVIEW_INTEGRATION
 $env:RUN_POSTGRES_LOYALTY_INTEGRATION = "1"
 node --test test/loyaltyPostgres.integration.test.js
 Remove-Item Env:RUN_POSTGRES_LOYALTY_INTEGRATION
+
+$env:RUN_POSTGRES_VOUCHER_INTEGRATION = "1"
+node --test test/voucherPostgres.integration.test.js
+Remove-Item Env:RUN_POSTGRES_VOUCHER_INTEGRATION
 ```
 
-Integration loyalty memerlukan migration 016 dan database test yang sudah dimigrasikan. Test membuat fixture dengan identitas unik dan hanya membersihkan row fixture yang dibuatnya; jangan arahkan ke database produksi.
+Integration loyalty memerlukan migration 016; integration voucher memerlukan migration 011–016. Gunakan database test terisolasi yang sudah dimigrasikan. Test membuat fixture dengan identitas unik dan hanya membersihkan row fixture yang dibuatnya; jangan arahkan ke database produksi.
 
 ### Audit dependency
 
@@ -178,7 +191,7 @@ Integration loyalty memerlukan migration 016 dan database test yang sudah dimigr
 
 ## 7. Status Pengembangan
 
-Source API untuk authentication, barber dan schedule management, booking, queue/Smart ETA, QR check-in, review dan rating, serta loyalty points tersedia di repository. Source Flutter dan backend terpisah belum tersedia pada folder `Frontend/` dan `Backend/` saat ini; keduanya hanya berisi `.gitkeep`.
+Source API untuk authentication, barber dan schedule management, booking, voucher/discount, queue/Smart ETA, QR check-in, review dan rating, serta loyalty points tersedia di repository. Source Flutter dan backend terpisah belum tersedia pada folder `Frontend/` dan `Backend/` saat ini; keduanya hanya berisi `.gitkeep`.
 
 Opsional, untuk membuat atau memperbarui satu akun barber seed, isi `SEED_BARBER_NAME`, `SEED_BARBER_EMAIL`, `SEED_BARBER_PHONE`, dan `SEED_BARBER_PASSWORD` di `API/.env`, lalu jalankan dari folder `API/`:
 
