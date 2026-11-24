@@ -18,10 +18,19 @@ const {
   authorizeRoles,
 } = require("../middlewares/authMiddleware");
 const { getTodayQueues } = require("../controllers/queueController");
+const {
+  getBarberPortfolios,
+  getBarberPortfolioById,
+} = require("../controllers/portfolioController");
 
 const router = express.Router();
 
 router.get("/", getBarbers);
+router.get("/:barberId/portfolios", getBarberPortfolios);
+router.get(
+  "/:barberId/portfolios/:portfolioId",
+  getBarberPortfolioById
+);
 router.get("/:barberId/schedules", getBarberSchedules);
 router.get(
   "/:barberId/queues/today",

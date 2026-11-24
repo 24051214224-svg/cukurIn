@@ -35,6 +35,7 @@ const swaggerSpec = swaggerJsdoc({
       { name: "Services" },
       { name: "Hairstyles" },
       { name: "Barbers" },
+      { name: "Portfolios" },
       { name: "Bookings" },
       { name: "Vouchers" },
       { name: "Queues" },
@@ -149,6 +150,40 @@ const swaggerSpec = swaggerJsdoc({
             experience_years: { type: "integer", minimum: 0 },
             is_available: { type: "boolean" },
             is_active: { type: "boolean" },
+          },
+        },
+        Portfolio: {
+          type: "object",
+          required: [
+            "id",
+            "barber_id",
+            "title",
+            "image_url",
+            "created_at",
+            "updated_at",
+          ],
+          properties: {
+            id: { type: "string", format: "uuid" },
+            barber_id: { type: "string", format: "uuid" },
+            title: { type: "string", maxLength: 150 },
+            description: { type: "string", nullable: true },
+            image_url: { type: "string", format: "uri" },
+            created_at: { type: "string", format: "date-time" },
+            updated_at: { type: "string", format: "date-time" },
+          },
+        },
+        PortfolioWriteRequest: {
+          type: "object",
+          required: ["title", "image_url"],
+          additionalProperties: false,
+          properties: {
+            title: { type: "string", minLength: 1, maxLength: 150 },
+            description: { type: "string", nullable: true },
+            image_url: {
+              type: "string",
+              format: "uri",
+              description: "URL absolut dengan protokol HTTP atau HTTPS.",
+            },
           },
         },
         ScheduleRequest: {
@@ -669,6 +704,104 @@ const swaggerSpec = swaggerJsdoc({
             401: response("JWT tidak valid atau tidak tersedia."),
             403: response("Hanya admin yang dapat mengelola barber."),
             404: response("Barber tidak ditemukan."),
+          },
+        },
+      },
+      "/api/barbers/{barberId}/portfolios": {
+        parameters: [
+          {
+            name: "barberId",
+            in: "path",
+            required: true,
+            schema: { type: "string", format: "uuid" },
+          },
+        ],
+        get: {
+          tags: ["Portfolios"],
+          summary: "Daftar portfolio publik milik barber",
+          responses: {
+            200: response("Daftar portfolio barber."),
+            400: response("ID barber tidak valid."),
+            404: response("Barber tidak ditemukan."),
+          },
+        },
+      },
+      "/api/barbers/{barberId}/portfolios/{portfolioId}": {
+        parameters: [
+          {
+            name: "barberId",
+            in: "path",
+            required: true,
+            schema: { type: "string", format: "uuid" },
+          },
+          {
+            name: "portfolioId",
+            in: "path",
+            required: true,
+            schema: { type: "string", format: "uuid" },
+          },
+        ],
+        get: {
+          tags: ["Portfolios"],
+          summary: "Detail portfolio publik milik barber",
+          responses: {
+            200: response("Detail portfolio barber."),
+            400: response("ID barber atau portfolio tidak valid."),
+            404: response("Portfolio tidak ditemukan."),
+          },
+        },
+      },
+      "/api/portfolios": {
+        post: {
+          tags: ["Portfolios"],
+          summary: "Buat portfolio untuk barber yang sedang login",
+          security: [{ bearerAuth: [] }],
+          requestBody: jsonRequestBody({
+            $ref: "#/components/schemas/PortfolioWriteRequest",
+          }),
+          responses: {
+            201: response("Portfolio berhasil dibuat."),
+            400: response("Data portfolio tidak valid."),
+            401: response("JWT tidak valid atau tidak tersedia."),
+            403: response("Hanya barber yang dapat mengelola portfolio."),
+            404: response("Profil barber tidak ditemukan."),
+          },
+        },
+      },
+      "/api/portfolios/{id}": {
+        parameters: [
+          {
+            name: "id",
+            in: "path",
+            required: true,
+            schema: { type: "string", format: "uuid" },
+          },
+        ],
+        put: {
+          tags: ["Portfolios"],
+          summary: "Perbarui portfolio milik barber yang sedang login",
+          security: [{ bearerAuth: [] }],
+          requestBody: jsonRequestBody({
+            $ref: "#/components/schemas/PortfolioWriteRequest",
+          }),
+          responses: {
+            200: response("Portfolio berhasil diperbarui."),
+            400: response("ID atau data portfolio tidak valid."),
+            401: response("JWT tidak valid atau tidak tersedia."),
+            403: response("Hanya barber yang dapat mengelola portfolio."),
+            404: response("Portfolio tidak ditemukan."),
+          },
+        },
+        delete: {
+          tags: ["Portfolios"],
+          summary: "Hapus portfolio milik barber yang sedang login",
+          security: [{ bearerAuth: [] }],
+          responses: {
+            200: response("Portfolio berhasil dihapus."),
+            400: response("ID portfolio tidak valid."),
+            401: response("JWT tidak valid atau tidak tersedia."),
+            403: response("Hanya barber yang dapat mengelola portfolio."),
+            404: response("Portfolio tidak ditemukan."),
           },
         },
       },
