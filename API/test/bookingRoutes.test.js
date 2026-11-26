@@ -24,8 +24,10 @@ const originalConnect = pool.connect;
 const customerId = "00fb6c12-a13b-4a63-a7f3-cfe1b4cde18d";
 const barberId = "9271c3fb-e0f3-4f82-b830-488594b4eaf3";
 const barberUserId = "77bb602e-22db-41a0-a8e3-1d105010e1d3";
+const adminUserId = "a7bb602e-22db-41a0-a8e3-1d105010e1d3";
 const serviceId = "69877e2c-2a7b-4bd0-8d15-c4b74b4bb8e8";
 const bookingId = "4795c0ca-5c0e-4491-975a-b8f6cd6eb99f";
+const secondBookingId = "5795c0ca-5c0e-4491-975a-b8f6cd6eb99f";
 
 const createToken = (role, id = customerId) =>
   jwt.sign({ id, role }, testJwtSecret);
@@ -66,6 +68,7 @@ const configureCreateTransaction = ({
   customerExists = true,
   barber = {
     id: barberId,
+    user_id: barberUserId,
     is_available: true,
     user_is_active: true,
   },
@@ -92,6 +95,9 @@ const configureCreateTransaction = ({
     if (sql.includes("role = 'customer'")) {
       return { rows: customerExists ? [{ id: customerId }] : [] };
     }
+    if (sql.includes("role = 'admin'")) {
+      return { rows: [{ id: adminUserId }] };
+    }
     if (sql.includes("FOR UPDATE OF b, u")) {
       return { rows: barber ? [barber] : [] };
     }
@@ -116,6 +122,9 @@ const configureCreateTransaction = ({
     }
     if (sql.includes("INSERT INTO booking_items")) {
       insertedItems.push(params);
+      return { rows: [] };
+    }
+    if (sql.includes("INSERT INTO notifications")) {
       return { rows: [] };
     }
     if (sql.includes("booking_code")) {
@@ -234,6 +243,15 @@ test("customer creates a booking using database service price and duration", asy
   assert.equal(insertBooking.params[5], "50000.00");
   assert.equal(insertBooking.params[4], expectedEnd);
   assert.equal(insertBooking.params[6], "appointment note");
+  const bookingNotifications = transactionCalls.filter((call) =>
+    call.sql.includes("INSERT INTO notifications")
+  );
+  assert.equal(bookingNotifications.length, 1);
+  assert.deepEqual(bookingNotifications[0].params[0], [
+    barberUserId,
+    adminUserId,
+  ]);
+  assert.equal(bookingNotifications[0].params[3], "booking");
   assert.deepEqual(insertItem.params.slice(1), [
     serviceId,
     "Haircut",
@@ -527,6 +545,7 @@ test("customer cancellation is limited to pending or confirmed future bookings",
           id: bookingId,
           status: statusToReturn.value,
           voucher_id: voucherId,
+          booking_code: "CK-CANCEL",
         }],
       };
     }
@@ -535,6 +554,12 @@ test("customer cancellation is limited to pending or confirmed future bookings",
     }
     if (sql.includes("SET used_count = used_count - 1")) {
       return { rows: [{ id: voucherId }] };
+    }
+    if (sql.includes("role = 'admin'")) {
+      return { rows: [{ id: adminUserId }] };
+    }
+    if (sql.includes("INSERT INTO notifications")) {
+      return { rows: [] };
     }
     return { rows: [] };
   });
@@ -545,6 +570,14 @@ test("customer cancellation is limited to pending or confirmed future bookings",
   });
   assert.equal(response.status, 200);
   assert.equal(transactionCalls.at(-1).sql, "COMMIT");
+  const cancellationNotification = transactionCalls.find((call) =>
+    call.sql.includes("INSERT INTO notifications")
+  );
+  assert.deepEqual(cancellationNotification.params[0], [
+    customerId,
+    barberUserId,
+    adminUserId,
+  ]);
   assert.equal(
     transactionCalls.filter((call) =>
       call.sql.includes("SET used_count = used_count - 1")
@@ -571,7 +604,7 @@ test("customer cancellation is limited to pending or confirmed future bookings",
 test("barber status changes require ownership and a valid state transition", async () => {
   let assignedUserId = barberUserId;
   let currentStatus = "pending";
-  useMockTransaction(async (sql) => {
+  useMockTransaction(async (sql, params) => {
     if (sql === "BEGIN" || sql === "COMMIT" || sql === "ROLLBACK") {
       return { rows: [] };
     }
@@ -582,9 +615,17 @@ test("barber status changes require ownership and a valid state transition", asy
       return { rows: [{ id: barberId, user_id: assignedUserId }] };
     }
     if (sql.includes("SELECT id, status, start_at")) {
-      return { rows: [{ id: bookingId, status: currentStatus, start_at: futureStartAt() }] };
+      return { rows: [{
+        id: bookingId,
+        status: currentStatus,
+        start_at: futureStartAt(),
+        barber_id: barberId,
+        customer_id: customerId,
+        booking_code: "CK-CONFIRM",
+      }] };
     }
-    if (sql.includes("SET status = $2")) {
+    if (sql.includes("UPDATE bookings") && sql.includes("SET status = $2")) {
+      currentStatus = params[1];
       return { rows: [{ id: bookingId, status: "confirmed" }] };
     }
     if (sql.includes("SELECT id FROM queues WHERE booking_id = $1")) {
@@ -609,6 +650,9 @@ test("barber status changes require ownership and a valid state transition", asy
     }
     if (sql.includes("INSERT INTO queues")) {
       return { rows: [{ id: "5e0e58e8-a7e4-41af-b77e-fc5fe10eb5fe" }] };
+    }
+    if (sql.includes("INSERT INTO notifications")) {
+      return { rows: [] };
     }
     if (sql.includes("FROM queues q") && sql.includes("duration_minutes")) {
       return { rows: [] };
@@ -653,6 +697,26 @@ test("barber status changes require ownership and a valid state transition", asy
     body: JSON.stringify({ status: "confirmed" }),
   });
   assert.equal(confirmed.status, 200);
+  const confirmationNotifications = transactionCalls.filter((call) =>
+    call.sql.includes("INSERT INTO notifications")
+  );
+  assert.equal(confirmationNotifications.length, 1);
+  assert.deepEqual(confirmationNotifications[0].params[0], [customerId]);
+
+  transactionCalls = [];
+  const duplicateConfirmation = await fetch(path, {
+    method: "PATCH",
+    headers: {
+      Authorization: `Bearer ${createToken("barber", barberUserId)}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({ status: "confirmed" }),
+  });
+  assert.equal(duplicateConfirmation.status, 409);
+  assert.equal(
+    transactionCalls.some((call) => call.sql.includes("INSERT INTO notifications")),
+    false
+  );
 
   transactionCalls = [];
   assignedUserId = "5a22d7d2-8b62-4b79-9d4c-6d3e8bd92e42";
@@ -682,6 +746,206 @@ test("barber status changes require ownership and a valid state transition", asy
   assert.equal(transactionCalls.at(-1).sql, "ROLLBACK");
 });
 
+test("booking in_progress rejects a second queue serving for the same barber", async () => {
+  let reservation = null;
+  let firstBookingStatus = "confirmed";
+  let secondBookingStatus = "confirmed";
+  let notificationInserts = 0;
+
+  useMockTransaction(async (sql, params) => {
+    if (sql === "BEGIN" || sql === "COMMIT" || sql === "ROLLBACK") return { rows: [] };
+    if (sql.includes("SELECT barber_id FROM bookings")) {
+      return { rows: [{ barber_id: barberId }] };
+    }
+    if (sql.includes("FROM barbers") && sql.includes("FOR UPDATE")) {
+      return { rows: [{ id: barberId, user_id: barberUserId }] };
+    }
+    if (sql.includes("SELECT id, status, start_at")) {
+      const targetId = params[0];
+      return { rows: [{
+        id: targetId,
+        status: targetId === secondBookingId ? secondBookingStatus : firstBookingStatus,
+        start_at: futureStartAt(),
+        barber_id: barberId,
+        customer_id: customerId,
+        booking_code: targetId === secondBookingId ? "CK-SECOND" : "CK-FIRST",
+      }] };
+    }
+    if (sql.includes("SELECT id, barber_id, queue_date, status") &&
+        sql.includes("FROM queues")) {
+      return { rows: [{
+        id: params[0] === secondBookingId ? "second-queue" : "first-queue",
+        barber_id: barberId,
+        queue_date: "2026-11-20",
+        status: "waiting",
+      }] };
+    }
+    if (sql.includes("AND status = 'serving'")) {
+      if (reservation) return { rows: [{ id: reservation, queue_number: 1 }] };
+      reservation = "reserved-during-request";
+      return { rows: [] };
+    }
+    if (sql.includes("UPDATE bookings") && sql.includes("SET status = $2")) {
+      if (params[0] === secondBookingId) secondBookingStatus = params[1];
+      else firstBookingStatus = params[1];
+      reservation = params[0];
+      return { rows: [{ id: params[0], status: params[1] }] };
+    }
+    if (sql.includes("UPDATE queues") && sql.includes("SET status = 'serving'")) {
+      return { rows: [{ id: "first-queue", queue_number: 1 }] };
+    }
+    if (sql.includes("INSERT INTO notifications")) {
+      notificationInserts += 1;
+      return { rows: [] };
+    }
+    if (sql.includes("FROM queues q") && sql.includes("duration_minutes")) return { rows: [] };
+    if (sql.includes("FROM booking_items")) return { rows: [] };
+    if (sql.includes("SELECT queue_date, barber_id")) {
+      return { rows: [{ barber_id: barberId, queue_date: "2026-11-20" }] };
+    }
+    return { rows: [] };
+  });
+
+  const path = `${baseUrl}/api/bookings`;
+  const first = await fetch(`${path}/${bookingId}/status`, {
+    method: "PATCH",
+    headers: {
+      Authorization: `Bearer ${createToken("barber", barberUserId)}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({ status: "in_progress" }),
+  });
+  assert.equal(first.status, 200);
+
+  const second = await fetch(`${path}/${secondBookingId}/status`, {
+    method: "PATCH",
+    headers: {
+      Authorization: `Bearer ${createToken("barber", barberUserId)}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({ status: "in_progress" }),
+  });
+  assert.equal(second.status, 409);
+  assert.equal(secondBookingStatus, "confirmed");
+  assert.equal(notificationInserts, 1);
+  assert.equal(transactionCalls.at(-1).sql, "ROLLBACK");
+});
+
+test("admin cancellation emits one notification batch and rejects a repeated transition", async () => {
+  let currentStatus = "pending";
+  useMockTransaction(async (sql, params) => {
+    if (sql === "BEGIN" || sql === "COMMIT" || sql === "ROLLBACK") {
+      return { rows: [] };
+    }
+    if (sql.includes("SELECT barber_id FROM bookings")) {
+      return { rows: [{ barber_id: barberId }] };
+    }
+    if (sql.includes("FROM barbers") && sql.includes("FOR UPDATE")) {
+      return { rows: [{ id: barberId, user_id: barberUserId }] };
+    }
+    if (sql.includes("SELECT id, status, start_at")) {
+      return {
+        rows: [{
+          id: bookingId,
+          status: currentStatus,
+          start_at: futureStartAt(),
+          barber_id: barberId,
+          customer_id: customerId,
+          booking_code: "CK-UPDATE-CANCEL",
+        }],
+      };
+    }
+    if (sql.includes("UPDATE bookings") && sql.includes("SET status = $2")) {
+      currentStatus = params[1];
+      return { rows: [{ id: bookingId, status: currentStatus }] };
+    }
+    if (sql.includes("role = 'admin'")) {
+      return { rows: [{ id: adminUserId }] };
+    }
+    if (sql.includes("INSERT INTO notifications")) {
+      return { rows: [] };
+    }
+    return { rows: [] };
+  });
+
+  const path = `${baseUrl}/api/bookings/${bookingId}/status`;
+  const response = await fetch(path, {
+    method: "PATCH",
+    headers: adminHeaders(),
+    body: JSON.stringify({ status: "cancelled" }),
+  });
+  assert.equal(response.status, 200);
+  const notifications = transactionCalls.filter((call) =>
+    call.sql.includes("INSERT INTO notifications")
+  );
+  assert.equal(notifications.length, 1);
+  assert.deepEqual(notifications[0].params[0], [
+    customerId,
+    barberUserId,
+    adminUserId,
+  ]);
+  assert.equal(transactionCalls.at(-1).sql, "COMMIT");
+
+  transactionCalls = [];
+  const duplicate = await fetch(path, {
+    method: "PATCH",
+    headers: adminHeaders(),
+    body: JSON.stringify({ status: "cancelled" }),
+  });
+  assert.equal(duplicate.status, 409);
+  assert.equal(
+    transactionCalls.some((call) => call.sql.includes("INSERT INTO notifications")),
+    false
+  );
+  assert.equal(transactionCalls.at(-1).sql, "ROLLBACK");
+});
+
+test("notification insert failure rolls booking cancellation back", async () => {
+  useMockTransaction(async (sql) => {
+    if (sql === "BEGIN" || sql === "COMMIT" || sql === "ROLLBACK") {
+      return { rows: [] };
+    }
+    if (sql.includes("SELECT barber_id FROM bookings")) {
+      return { rows: [{ barber_id: barberId }] };
+    }
+    if (sql.includes("FROM barbers") && sql.includes("FOR UPDATE")) {
+      return { rows: [{ id: barberId, user_id: barberUserId }] };
+    }
+    if (sql.includes("customer_id = $2") && sql.includes("FOR UPDATE")) {
+      return {
+        rows: [{
+          id: bookingId,
+          status: "pending",
+          voucher_id: null,
+          booking_code: "CK-ROLLBACK",
+        }],
+      };
+    }
+    if (sql.includes("UPDATE bookings") && sql.includes("SET status = 'cancelled'")) {
+      return { rows: [{ id: bookingId, status: "cancelled" }] };
+    }
+    if (sql.includes("role = 'admin'")) {
+      return { rows: [{ id: adminUserId }] };
+    }
+    if (sql.includes("INSERT INTO notifications")) {
+      throw new Error("simulated notification insert failure");
+    }
+    return { rows: [] };
+  });
+
+  const response = await fetch(`${baseUrl}/api/bookings/${bookingId}/cancel`, {
+    method: "PATCH",
+    headers: { Authorization: `Bearer ${createToken("customer")}` },
+  });
+
+  assert.equal(response.status, 500);
+  assert.equal(transactionCalls.at(-1).sql, "ROLLBACK");
+  assert.equal(transactionCalls.some((call) => call.sql === "COMMIT"), false);
+  assert.ok(transactionCalls.some((call) =>
+    call.sql.includes("UPDATE bookings") && call.sql.includes("SET status = 'cancelled'")
+  ));
+});
+
 test("completed booking awards points to its customer in the booking transaction", async () => {
   useMockTransaction(async (sql, params) => {
     if (sql === "BEGIN" || sql === "COMMIT" || sql === "ROLLBACK") {
@@ -699,6 +963,7 @@ test("completed booking awards points to its customer in the booking transaction
           id: bookingId,
           status: "in_progress",
           start_at: new Date(Date.now() - 60_000).toISOString(),
+          barber_id: barberId,
           has_started: true,
         }],
       };
@@ -750,6 +1015,7 @@ test("admin can mark a booking no-show only after its start time", async () => {
             id: bookingId,
             status: "confirmed",
             start_at: bookingStart,
+            barber_id: barberId,
             voucher_id: "936fd05a-c130-40e7-9e0a-71d8084c77c4",
             has_started: new Date(bookingStart).getTime() <= Date.now(),
           },
@@ -826,7 +1092,12 @@ test("concurrent requests for the same barber and time cannot double-book", asyn
           await previous;
           return {
             rows: [
-              { id: barberId, is_available: true, user_is_active: true },
+              {
+                id: barberId,
+                user_id: barberUserId,
+                is_available: true,
+                user_is_active: true,
+              },
             ],
           };
         }

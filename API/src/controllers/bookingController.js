@@ -11,6 +11,7 @@ const {
 const {
   createQueueForConfirmedBooking,
   refreshQueueEta,
+  lockBarberForServing,
 } = require("./queueController");
 const {
   awardCompletedBookingPoints,
@@ -20,6 +21,12 @@ const {
   reserveVoucher,
   releaseVoucherUsage,
 } = require("../services/voucherService");
+const {
+  notifyBookingCreated,
+  notifyBookingConfirmed,
+  notifyBookingCancelled,
+  notifyQueueStatus,
+} = require("../services/notificationService");
 
 const BUSINESS_TIME_ZONE = process.env.BUSINESS_TIME_ZONE || "Asia/Jakarta";
 const businessTimeFormatter = new Intl.DateTimeFormat("en-US", {
@@ -67,7 +74,7 @@ const withTransaction = async (operation, label) => {
 };
 
 const respondWithDatabaseError = (res, error, operation, message) => {
-  if (error instanceof HttpError) {
+  if (error instanceof HttpError || error?.statusCode) {
     return res.status(error.statusCode).json({
       success: false,
       message: error.message,
@@ -120,6 +127,7 @@ const lockAvailableBarber = async (client, barberId) => {
   const result = await client.query(
     `SELECT b.id,
             b.is_available,
+            u.id AS user_id,
             u.is_active AS user_is_active
      FROM barbers b
      JOIN users u ON u.id = b.user_id
@@ -444,7 +452,7 @@ const createBooking = async (req, res) => {
   try {
     const createdBooking = await withTransaction(async (client) => {
       await lockCustomer(client, req.user.id);
-      await lockAvailableBarber(client, booking.barber_id);
+      const barber = await lockAvailableBarber(client, booking.barber_id);
       const { itemSnapshots, totalDuration, totalPriceCents } =
         await loadActiveServices(client, booking.items);
       let totalPrice = (totalPriceCents / 100).toFixed(2);
@@ -523,6 +531,11 @@ const createBooking = async (req, res) => {
         );
       }
 
+      await notifyBookingCreated(client, {
+        barberUserId: barber.user_id,
+        bookingCode,
+      });
+
       return getBookingDetails(client, bookingId);
     }, "Create booking");
 
@@ -578,9 +591,9 @@ const cancelBooking = async (req, res) => {
 
   try {
     const booking = await withTransaction(async (client) => {
-      await lockBookingBarber(client, validation.data);
+      const barber = await lockBookingBarber(client, validation.data);
       const currentResult = await client.query(
-        `SELECT id, status, voucher_id
+        `SELECT id, status, voucher_id, booking_code
          FROM bookings
          WHERE id = $1 AND customer_id = $2
          FOR UPDATE`,
@@ -643,6 +656,12 @@ const cancelBooking = async (req, res) => {
         );
       }
 
+      await notifyBookingCancelled(client, {
+        customerId: req.user.id,
+        barberUserId: barber.user_id,
+        bookingCode: currentResult.rows[0].booking_code,
+      });
+
       return updateResult.rows[0];
     }, "Cancel booking");
 
@@ -701,8 +720,8 @@ const updateBookingStatus = async (req, res) => {
       }
 
       const currentResult = await client.query(
-        `SELECT id, status, start_at, voucher_id,
-                start_at <= statement_timestamp() AS has_started
+        `SELECT id, status, start_at, voucher_id, customer_id, booking_code,
+                barber_id, start_at <= statement_timestamp() AS has_started
          FROM bookings
          WHERE id = $1
          FOR UPDATE`,
@@ -721,6 +740,9 @@ const updateBookingStatus = async (req, res) => {
           `Status ${current.status} tidak dapat diubah menjadi ${validation.data.status}`
         );
       }
+      if (current.barber_id !== barber.id) {
+        throw new RequestError(409, "Barber reservasi sudah berubah");
+      }
       if (
         validation.data.status === "no_show" &&
         !current.has_started
@@ -731,6 +753,26 @@ const updateBookingStatus = async (req, res) => {
         );
       }
 
+      let targetQueueId = null;
+      if (validation.data.status === "in_progress") {
+        const targetQueue = await client.query(
+          `SELECT id, barber_id, queue_date, status
+           FROM queues
+           WHERE booking_id = $1
+           ORDER BY id ASC
+           LIMIT 1
+           FOR UPDATE`,
+          [idValidation.data]
+        );
+        if (targetQueue.rows.length > 0) {
+          if (targetQueue.rows[0].barber_id !== barber.id) {
+            throw new RequestError(409, "Antrean tidak sesuai dengan barber reservasi");
+          }
+          targetQueueId = targetQueue.rows[0].id;
+        }
+        await lockBarberForServing(client, barber.id, targetQueueId);
+      }
+
       const updateResult = await client.query(
         `UPDATE bookings
          SET status = $2, updated_at = CURRENT_TIMESTAMP
@@ -738,6 +780,9 @@ const updateBookingStatus = async (req, res) => {
          RETURNING id, status, updated_at`,
         [idValidation.data, validation.data.status]
       );
+      if (updateResult.rows.length === 0) {
+        throw new RequestError(409, "Status reservasi sudah berubah");
+      }
 
       if (validation.data.status === "completed") {
         await awardCompletedBookingPoints(client, idValidation.data);
@@ -745,6 +790,10 @@ const updateBookingStatus = async (req, res) => {
 
       if (validation.data.status === "confirmed") {
         await createQueueForConfirmedBooking(client, idValidation.data);
+        await notifyBookingConfirmed(client, {
+          customerId: current.customer_id,
+          bookingCode: current.booking_code,
+        });
       }
 
       if (validation.data.status === "cancelled") {
@@ -760,6 +809,11 @@ const updateBookingStatus = async (req, res) => {
              AND status IN ('waiting', 'called', 'serving')`,
           [idValidation.data]
         );
+        await notifyBookingCancelled(client, {
+          customerId: current.customer_id,
+          barberUserId: barber.user_id,
+          bookingCode: current.booking_code,
+        });
       }
 
       if (["in_progress", "completed", "cancelled"].includes(validation.data.status)) {
@@ -771,26 +825,50 @@ const updateBookingStatus = async (req, res) => {
           [idValidation.data]
         );
         if (validation.data.status === "completed") {
-          await client.query(
+          const queueResult = await client.query(
             `UPDATE queues
              SET status = 'completed',
                  completed_at = COALESCE(completed_at, CURRENT_TIMESTAMP),
                  updated_at = CURRENT_TIMESTAMP
              WHERE booking_id = $1
-               AND status = 'serving'`,
+               AND status = 'serving'
+             RETURNING id, queue_number`,
             [idValidation.data]
           );
+          if (queueResult.rows.length > 0) {
+            await notifyQueueStatus(
+              client,
+              {
+                customerId: current.customer_id,
+                bookingCode: current.booking_code,
+                queueNumber: queueResult.rows[0].queue_number,
+              },
+              "completed"
+            );
+          }
         }
         if (validation.data.status === "in_progress") {
-          await client.query(
+          const queueResult = await client.query(
             `UPDATE queues
              SET status = 'serving',
                  started_at = COALESCE(started_at, CURRENT_TIMESTAMP),
                  updated_at = CURRENT_TIMESTAMP
              WHERE booking_id = $1
-               AND status IN ('waiting', 'called')`,
+               AND status IN ('waiting', 'called')
+             RETURNING id, queue_number`,
             [idValidation.data]
           );
+          if (queueResult.rows.length > 0) {
+            await notifyQueueStatus(
+              client,
+              {
+                customerId: current.customer_id,
+                bookingCode: current.booking_code,
+                queueNumber: queueResult.rows[0].queue_number,
+              },
+              "serving"
+            );
+          }
         }
         if (queueDateResult.rows.length > 0) {
           await refreshQueueEta(

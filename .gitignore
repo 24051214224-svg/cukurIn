@@ -4,6 +4,19 @@
 .env.*
 !.env.example
 
+# Private keys and local credentials
+*.pem
+*.key
+*.p12
+*.pfx
+*.ppk
+*.jks
+*.keystore
+id_rsa
+id_ed25519
+credentials.local.*
+secrets.local.*
+
 # Node.js
 node_modules/
 npm-debug.log*

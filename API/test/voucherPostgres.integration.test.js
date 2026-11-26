@@ -11,6 +11,7 @@ process.env.JWT_SECRET = integrationJwtSecret;
 
 const app = require("../src/app");
 const pool = require("../src/config/database");
+const verifyPostgresTestDatabase = require("./helpers/verifyPostgresTestDatabase");
 const runIntegration =
   process.env.RUN_POSTGRES_VOUCHER_INTEGRATION === "1";
 const createToken = (role, id) =>
@@ -33,6 +34,8 @@ test("PostgreSQL voucher integration: net booking total, quota, cancellation, no
     ? "Set RUN_POSTGRES_VOUCHER_INTEGRATION=1 to run PostgreSQL voucher integration tests"
     : false,
 }, async () => {
+  await verifyPostgresTestDatabase(pool);
+
   const suffix = crypto.randomUUID().replace(/-/g, "").slice(0, 12).toUpperCase();
   const ids = {
     userIds: [],

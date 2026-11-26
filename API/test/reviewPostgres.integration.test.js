@@ -6,6 +6,7 @@ const jwt = require("jsonwebtoken");
 require("dotenv").config();
 const app = require("../src/app");
 const pool = require("../src/config/database");
+const verifyPostgresTestDatabase = require("./helpers/verifyPostgresTestDatabase");
 
 const runIntegration =
   process.env.RUN_POSTGRES_REVIEW_INTEGRATION === "1";
@@ -15,6 +16,8 @@ test("PostgreSQL review integration: ownership, status, uniqueness, and scoped r
     ? "Set RUN_POSTGRES_REVIEW_INTEGRATION=1 to run direct PostgreSQL review integration tests"
     : false,
 }, async () => {
+  await verifyPostgresTestDatabase(pool);
+
   const suffix = crypto.randomUUID();
   const ids = {};
   let cleanupNeeded = false;

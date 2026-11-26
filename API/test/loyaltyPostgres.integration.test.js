@@ -13,6 +13,7 @@ process.env.LOYALTY_RUPIAH_PER_POINT = "10000";
 
 const app = require("../src/app");
 const pool = require("../src/config/database");
+const verifyPostgresTestDatabase = require("./helpers/verifyPostgresTestDatabase");
 const { awardCompletedBookingPoints } = require("../src/services/loyaltyService");
 
 const runIntegration =
@@ -25,6 +26,8 @@ test("PostgreSQL loyalty integration: earn, scoped reads, redemption, and concur
     ? "Set RUN_POSTGRES_LOYALTY_INTEGRATION=1 to run PostgreSQL loyalty integration tests"
     : false,
 }, async () => {
+  await verifyPostgresTestDatabase(pool);
+
   const suffix = crypto.randomUUID();
   const ids = { userIds: [], bookingIds: [] };
   let cleanupNeeded = false;

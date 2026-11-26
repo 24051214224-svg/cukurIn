@@ -52,6 +52,8 @@ app.use("/api/barbers", require("./routes/barberRoutes"));
 
 app.use("/api/portfolios", require("./routes/portfolioRoutes"));
 
+app.use("/api/notifications", require("./routes/notificationRoutes"));
+
 app.use("/api/bookings", require("./routes/bookingRoutes"));
 
 app.use("/api/vouchers", require("./routes/voucherRoutes"));

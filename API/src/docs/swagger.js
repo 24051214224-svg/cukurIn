@@ -36,6 +36,7 @@ const swaggerSpec = swaggerJsdoc({
       { name: "Hairstyles" },
       { name: "Barbers" },
       { name: "Portfolios" },
+      { name: "Notifications" },
       { name: "Bookings" },
       { name: "Vouchers" },
       { name: "Queues" },
@@ -184,6 +185,67 @@ const swaggerSpec = swaggerJsdoc({
               format: "uri",
               description: "URL absolut dengan protokol HTTP atau HTTPS.",
             },
+          },
+        },
+        Notification: {
+          type: "object",
+          required: [
+            "id",
+            "title",
+            "message",
+            "notification_type",
+            "is_read",
+            "created_at",
+          ],
+          properties: {
+            id: { type: "string", format: "uuid" },
+            title: { type: "string", maxLength: 150 },
+            message: { type: "string" },
+            notification_type: {
+              type: "string",
+              enum: ["booking", "queue", "payment", "promotion", "system"],
+            },
+            is_read: { type: "boolean" },
+            created_at: { type: "string", format: "date-time" },
+          },
+        },
+        NotificationListResponse: {
+          type: "object",
+          required: ["success", "message", "data"],
+          properties: {
+            success: { type: "boolean" },
+            message: { type: "string" },
+            data: {
+              type: "object",
+              required: ["notifications", "pagination"],
+              properties: {
+                notifications: {
+                  type: "array",
+                  items: { $ref: "#/components/schemas/Notification" },
+                },
+                pagination: {
+                  type: "object",
+                  required: ["limit", "offset"],
+                  properties: {
+                    limit: { type: "integer", minimum: 1, maximum: 100 },
+                    offset: {
+                      type: "integer",
+                      minimum: 0,
+                      maximum: 1_000_000,
+                    },
+                  },
+                },
+              },
+            },
+          },
+        },
+        NotificationResponse: {
+          type: "object",
+          required: ["success", "message", "data"],
+          properties: {
+            success: { type: "boolean" },
+            message: { type: "string" },
+            data: { $ref: "#/components/schemas/Notification" },
           },
         },
         ScheduleRequest: {
@@ -802,6 +864,91 @@ const swaggerSpec = swaggerJsdoc({
             401: response("JWT tidak valid atau tidak tersedia."),
             403: response("Hanya barber yang dapat mengelola portfolio."),
             404: response("Portfolio tidak ditemukan."),
+          },
+        },
+      },
+      "/api/notifications": {
+        get: {
+          tags: ["Notifications"],
+          summary: "Daftar notifikasi milik pengguna yang login",
+          description:
+            "Customer, barber, dan admin hanya melihat notifikasi milik sendiri. Parameter query selain limit dan offset ditolak.",
+          security: [{ bearerAuth: [] }],
+          parameters: [
+            {
+              name: "limit",
+              in: "query",
+              required: false,
+              description: "Jumlah maksimal notifikasi per halaman.",
+              schema: {
+                type: "integer",
+                minimum: 1,
+                maximum: 100,
+                default: 50,
+              },
+            },
+            {
+              name: "offset",
+              in: "query",
+              required: false,
+              description: "Jumlah notifikasi yang dilewati.",
+              schema: {
+                type: "integer",
+                minimum: 0,
+                maximum: 1_000_000,
+                default: 0,
+              },
+            },
+          ],
+          responses: {
+            200: {
+              description: "Daftar notifikasi dan informasi pagination.",
+              content: {
+                "application/json": {
+                  schema: {
+                    $ref: "#/components/schemas/NotificationListResponse",
+                  },
+                },
+              },
+            },
+            400: response("Parameter query tidak valid."),
+            401: response("JWT tidak valid atau tidak tersedia."),
+            403: response("Role pengguna tidak didukung."),
+            500: response("Gagal mengambil daftar notifikasi."),
+          },
+        },
+      },
+      "/api/notifications/{id}/read": {
+        parameters: [
+          {
+            name: "id",
+            in: "path",
+            required: true,
+            schema: { type: "string", format: "uuid" },
+          },
+        ],
+        patch: {
+          tags: ["Notifications"],
+          summary: "Tandai notifikasi milik pengguna sebagai telah dibaca",
+          description:
+            "Pengguna hanya dapat memperbarui notifikasi miliknya sendiri.",
+          security: [{ bearerAuth: [] }],
+          responses: {
+            200: {
+              description: "Notifikasi berhasil ditandai telah dibaca.",
+              content: {
+                "application/json": {
+                  schema: {
+                    $ref: "#/components/schemas/NotificationResponse",
+                  },
+                },
+              },
+            },
+            400: response("ID notifikasi tidak valid."),
+            401: response("JWT tidak valid atau tidak tersedia."),
+            403: response("Role pengguna tidak didukung."),
+            404: response("Notifikasi tidak ditemukan atau bukan milik pengguna."),
+            500: response("Gagal memperbarui notifikasi."),
           },
         },
       },

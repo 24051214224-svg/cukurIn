@@ -7,6 +7,10 @@ const {
 const {
   awardCompletedBookingPoints,
 } = require("../services/loyaltyService");
+const {
+  notifyBookingCancelled,
+  notifyQueueStatus,
+} = require("../services/notificationService");
 
 const BUSINESS_TIME_ZONE = process.env.BUSINESS_TIME_ZONE || "Asia/Jakarta";
 const ACTIVE_STATUSES = ["waiting", "called", "serving"];
@@ -50,7 +54,7 @@ const respondError = (res, error, operation, fallbackMessage) => {
       message: "Antrean sudah digunakan atau nomor antrean duplikat",
     });
   }
-  console.error(`${operation} error:`, error.message);
+  console.error(`${operation} error:`, error.stack || error.message);
   return res.status(500).json({
     success: false,
     message: fallbackMessage,
@@ -213,6 +217,15 @@ const createQueueForConfirmedBooking = async (client, bookingId) => {
   );
   if (existing.rows.length > 0) return existing.rows[0];
 
+  const bookingReference = await client.query(
+    "SELECT barber_id FROM bookings WHERE id = $1",
+    [bookingId]
+  );
+  if (bookingReference.rows.length === 0) {
+    throw new RequestError(404, "Reservasi tidak ditemukan");
+  }
+  await lockBarberRow(client, bookingReference.rows[0].barber_id);
+
   const booking = await client.query(
     `SELECT b.id, b.barber_id, b.customer_id, b.start_at, b.status
      FROM bookings b
@@ -223,12 +236,10 @@ const createQueueForConfirmedBooking = async (client, bookingId) => {
   if (booking.rows.length === 0) {
     throw new RequestError(404, "Reservasi tidak ditemukan");
   }
+  if (booking.rows[0].barber_id !== bookingReference.rows[0].barber_id) {
+    throw new RequestError(409, "Barber reservasi sudah berubah");
+  }
   if (booking.rows[0].status !== "confirmed") return null;
-
-  await client.query(
-    "SELECT id FROM barbers WHERE id = $1 FOR UPDATE",
-    [booking.rows[0].barber_id]
-  );
 
   const queueDate = getLocalQueueDate(booking.rows[0].start_at);
   const numberResult = await client.query(
@@ -256,10 +267,20 @@ const createQueueForConfirmedBooking = async (client, bookingId) => {
 };
 
 const lockQueueForRole = async (client, queueId, user) => {
+  const barberRef = await client.query(
+    "SELECT barber_id FROM queues WHERE id = $1",
+    [queueId]
+  );
+  if (barberRef.rows.length === 0) {
+    throw new RequestError(404, "Antrean tidak ditemukan");
+  }
+
+  await lockBarberRow(client, barberRef.rows[0].barber_id);
+
   const result = await client.query(
     `SELECT q.id, q.booking_id, q.barber_id, q.queue_date, q.queue_number,
             q.status, q.checked_in_at, q.started_at,
-            b.customer_id, b.status AS booking_status,
+            b.customer_id, b.booking_code, b.status AS booking_status,
             barber.user_id AS barber_user_id
      FROM queues q
      JOIN bookings b ON b.id = q.booking_id
@@ -280,6 +301,41 @@ const lockQueueForRole = async (client, queueId, user) => {
     throw new RequestError(404, "Antrean tidak ditemukan");
   }
   return queue;
+};
+
+const lockBarberRow = async (client, barberId) => {
+  const barber = await client.query(
+    "SELECT id FROM barbers WHERE id = $1 FOR UPDATE",
+    [barberId]
+  );
+  if (barber.rows.length === 0) {
+    throw new RequestError(404, "Barber tidak ditemukan");
+  }
+  return barber;
+};
+
+const lockBarberForServing = async (client, barberId, excludeQueueId = null) => {
+  const barber = await lockBarberRow(client, barberId);
+
+  const serving = await client.query(
+    `SELECT id, queue_number
+     FROM queues
+     WHERE barber_id = $1
+       AND status = 'serving'
+       AND ($2::uuid IS NULL OR id <> $2::uuid)
+     ORDER BY started_at ASC NULLS LAST, queue_number ASC, id ASC
+     LIMIT 1
+     FOR UPDATE`,
+    [barberId, excludeQueueId]
+  );
+  if (serving.rows.length > 0) {
+    throw new RequestError(
+      409,
+      "Barber masih melayani pelanggan lain. Selesaikan layanan aktif sebelum memulai antrean berikutnya."
+    );
+  }
+
+  return barber.rows[0];
 };
 
 const getMyQueues = async (req, res) => {
@@ -326,13 +382,7 @@ const getTodayQueues = async (req, res) => {
           throw new RequestError(404, "Barber tidak ditemukan");
         }
       }
-      const barber = await client.query(
-        "SELECT id FROM barbers WHERE id = $1",
-        [validation.data]
-      );
-      if (barber.rows.length === 0) {
-        throw new RequestError(404, "Barber tidak ditemukan");
-      }
+      await lockBarberRow(client, validation.data);
 
       const today = getLocalQueueDate(new Date().toISOString());
       await refreshQueueEta(client, validation.data, today);
@@ -407,6 +457,9 @@ const changeQueueStatus = async (req, res, nextStatus) => {
           `Status antrean ${current.status} tidak dapat diubah menjadi ${nextStatus}`
         );
       }
+      if (nextStatus === "serving") {
+        await lockBarberForServing(client, current.barber_id, current.id);
+      }
       let extraSet = "";
       if (nextStatus === "serving") {
         extraSet = ", started_at = COALESCE(started_at, CURRENT_TIMESTAMP)";
@@ -414,12 +467,16 @@ const changeQueueStatus = async (req, res, nextStatus) => {
       if (nextStatus === "completed") {
         extraSet = ", completed_at = COALESCE(completed_at, CURRENT_TIMESTAMP)";
       }
-      await client.query(
+      const queueUpdate = await client.query(
         `UPDATE queues
          SET status = $2, updated_at = CURRENT_TIMESTAMP ${extraSet}
-         WHERE id = $1`,
+         WHERE id = $1
+         RETURNING id, queue_number`,
         [current.id, nextStatus]
       );
+      if (queueUpdate.rows.length === 0) {
+        throw new RequestError(409, "Status antrean sudah berubah");
+      }
 
       const bookingStatus =
         nextStatus === "serving"
@@ -428,16 +485,29 @@ const changeQueueStatus = async (req, res, nextStatus) => {
             ? "completed"
             : null;
       if (bookingStatus) {
-        await client.query(
+        const bookingUpdate = await client.query(
           `UPDATE bookings
            SET status = $2, updated_at = CURRENT_TIMESTAMP
-           WHERE id = $1`,
+           WHERE id = $1
+           RETURNING id`,
           [current.booking_id, bookingStatus]
         );
+        if (bookingUpdate.rows.length === 0) {
+          throw new RequestError(409, "Status reservasi sudah berubah");
+        }
       }
       if (bookingStatus === "completed") {
         await awardCompletedBookingPoints(client, current.booking_id);
       }
+      await notifyQueueStatus(
+        client,
+        {
+          customerId: current.customer_id,
+          bookingCode: current.booking_code,
+          queueNumber: current.queue_number,
+        },
+        nextStatus
+      );
       await refreshQueueEta(client, current.barber_id, current.queue_date);
       return loadQueueDetails(client, current.id);
     }, `Change queue to ${nextStatus}`);
@@ -467,21 +537,33 @@ const cancelQueue = async (req, res) => {
         throw new RequestError(409, "Layanan yang sedang berlangsung tidak dapat dibatalkan");
       }
 
-      await client.query(
+      const queueUpdate = await client.query(
         `UPDATE queues
          SET status = 'cancelled',
              cancelled_at = COALESCE(cancelled_at, CURRENT_TIMESTAMP),
              updated_at = CURRENT_TIMESTAMP
-         WHERE id = $1`,
+         WHERE id = $1
+         RETURNING id`,
         [current.id]
       );
-      await client.query(
+      if (queueUpdate.rows.length === 0) {
+        throw new RequestError(409, "Status antrean sudah berubah");
+      }
+      const bookingUpdate = await client.query(
         `UPDATE bookings
          SET status = 'cancelled', updated_at = CURRENT_TIMESTAMP
          WHERE id = $1
-           AND status IN ('pending', 'confirmed', 'in_progress')`,
+           AND status IN ('pending', 'confirmed', 'in_progress')
+         RETURNING id`,
         [current.booking_id]
       );
+      if (bookingUpdate.rows.length > 0) {
+        await notifyBookingCancelled(client, {
+          customerId: current.customer_id,
+          barberUserId: current.barber_user_id,
+          bookingCode: current.booking_code,
+        });
+      }
       await refreshQueueEta(client, current.barber_id, current.queue_date);
       return loadQueueDetails(client, current.id);
     }, "Cancel queue");
@@ -519,6 +601,18 @@ const checkInByToken = async (req, res) => {
 const performCheckIn = async (res, user, queueId, token) => {
   try {
     const queue = await withTransaction(async (client) => {
+      const barberReference = await client.query(
+        `SELECT q.barber_id
+         FROM queues q
+         WHERE q.qr_token = $1
+           AND ($2::uuid IS NULL OR q.id = $2::uuid)`,
+        [token, queueId]
+      );
+      if (barberReference.rows.length === 0) {
+        throw new RequestError(404, "Antrean atau QR token tidak ditemukan");
+      }
+      await lockBarberRow(client, barberReference.rows[0].barber_id);
+
       const result = await client.query(
         `SELECT q.id, q.barber_id, q.queue_date, q.status, q.checked_in_at,
                 b.customer_id
@@ -533,6 +627,9 @@ const performCheckIn = async (res, user, queueId, token) => {
         throw new RequestError(404, "Antrean atau QR token tidak ditemukan");
       }
       const current = result.rows[0];
+      if (current.barber_id !== barberReference.rows[0].barber_id) {
+        throw new RequestError(409, "Barber antrean sudah berubah");
+      }
       if (current.customer_id !== user.id) {
         throw new RequestError(404, "Antrean tidak ditemukan");
       }
@@ -566,6 +663,7 @@ const performCheckIn = async (res, user, queueId, token) => {
 module.exports = {
   createQueueForConfirmedBooking,
   refreshQueueEta,
+  lockBarberForServing,
   calculateSmartEta,
   getMyQueues,
   getTodayQueues,
